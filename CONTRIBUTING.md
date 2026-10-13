@@ -12,7 +12,7 @@ Debian 13 (adjust the installer for your OS):
 ```bash
 sudo apt update && sudo apt install -y git curl make pipx nodejs npm
 pipx ensurepath
-pipx install fsfe-reuse
+pipx install reuse
 go version   # want Go 1.27+
 ```
 

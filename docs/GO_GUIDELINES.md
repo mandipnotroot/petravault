@@ -383,7 +383,7 @@ every file carries `SPDX-FileCopyrightText:` + `SPDX-License-Identifier:` header
 and uncommentable files (if any) are covered via `.reuse/dep5`.
 
 ```bash
-pipx install fsfe-reuse   # or: pip install reuse
+pipx install reuse   # or: pip install reuse
 reuse lint                # via make: make reuse
 ```
 
@@ -415,7 +415,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install REUSE tool
-        run: pipx install fsfe-reuse
+        run: pipx install reuse
       - name: Formatting
         run: go tool golangci-lint fmt --diff ./...
       - name: Modules are tidy

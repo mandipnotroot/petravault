@@ -24,7 +24,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install REUSE tool
-        run: pipx install fsfe-reuse
+        run: pipx install reuse
       - name: Formatting
         run: go tool golangci-lint fmt --diff ./...
       - name: Modules are tidy
