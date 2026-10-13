@@ -56,6 +56,13 @@ func (k SecretKey) Equal(other SecretKey) bool {
 	return subtle.ConstantTimeCompare(k.b[:], other.b[:]) == 1
 }
 
+// Bytes returns a copy of the key material for APIs that take raw bytes,
+// such as the keyed chunker (DESIGN.md §3.2). The caller owns the copy and
+// should clear it when finished.
+func (k SecretKey) Bytes() [32]byte {
+	return k.b
+}
+
 // Zero clears the key material (best effort in Go).
 func (k *SecretKey) Zero() {
 	clear(k.b[:])

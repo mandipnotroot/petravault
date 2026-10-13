@@ -219,6 +219,24 @@ func TestSecretKeyZeroAndEqual(t *testing.T) {
 	}
 }
 
+func TestSecretKeyBytesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	key := mustGenerate(t)
+	raw := key.Bytes()
+	back, err := crypto.NewKeyFromBytes(raw[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !key.Equal(back) {
+		t.Fatal("Bytes does not round-trip through NewKeyFromBytes")
+	}
+	// Bytes returns a copy: mutating it must not affect the key.
+	raw[0] ^= 0xff
+	if !key.Equal(back) {
+		t.Fatal("mutating Bytes output altered the key; want an owned copy")
+	}
+}
 func TestNewKeyFromBytesRejectsBadLength(t *testing.T) {
 	t.Parallel()
 
