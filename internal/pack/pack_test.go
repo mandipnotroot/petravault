@@ -13,6 +13,7 @@ import (
 
 	"petravault/internal/compression"
 	"petravault/internal/crypto"
+	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
 	"petravault/internal/pack"
 	"petravault/internal/repository"
@@ -69,6 +70,15 @@ func readKey(t *testing.T, repo *repository.Local, ctxKey string) []byte {
 	return raw
 }
 
+func mustRepair(t *testing.T, data, sidecar []byte) []byte {
+	t.Helper()
+	fixed, err := erasure.Repair(data, sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixed
+}
+
 func TestPackRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -91,12 +101,12 @@ func TestPackRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		if w.Buffered() >= 4096 {
-			if _, err := w.Flush(ctx, repo); err != nil {
+			if _, err := w.Flush(ctx, repo, "off"); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if _, err := w.Flush(ctx, repo); err != nil {
+	if _, err := w.Flush(ctx, repo, "off"); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.Packs()) == 0 {
@@ -137,7 +147,7 @@ func TestPackRoundTrip(t *testing.T) {
 		}
 	}
 
-	indexKey, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, entries)
+	indexKey, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, entries, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +179,7 @@ func TestPackNameIsContentHash(t *testing.T) {
 	if err := w.Add(chunkID(t, keys.chunkID, plaintext), plaintext); err != nil {
 		t.Fatal(err)
 	}
-	packKey, err := w.Flush(ctx, repo)
+	packKey, err := w.Flush(ctx, repo, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +199,7 @@ func TestFlushEmptyWritesNothing(t *testing.T) {
 	keys := mustSubkeys(t)
 	repo := mustRepo(t)
 	w := pack.NewWriter(testRepoID, keys.data, 0)
-	key, err := w.Flush(t.Context(), repo)
+	key, err := w.Flush(t.Context(), repo, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +224,7 @@ func TestReadChunkRejectsTampering(t *testing.T) {
 	if err := w.Add(id, plaintext); err != nil {
 		t.Fatal(err)
 	}
-	packKey, err := w.Flush(ctx, repo)
+	packKey, err := w.Flush(ctx, repo, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +277,7 @@ func TestReadChunkRejectsWrongKeyAndSwappedBlob(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := w.Flush(ctx, repo); err != nil {
+	if _, err := w.Flush(ctx, repo, "off"); err != nil {
 		t.Fatal(err)
 	}
 	entries := w.Entries()
@@ -307,7 +317,7 @@ func TestIndexRoundTripAndMerge(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := w.Flush(ctx, repo); err != nil {
+		if _, err := w.Flush(ctx, repo, "off"); err != nil {
 			t.Fatal(err)
 		}
 		return w.Entries()
@@ -316,11 +326,11 @@ func TestIndexRoundTripAndMerge(t *testing.T) {
 	second := writePack([]byte("gamma"))
 	all := slices.Concat(first, second)
 
-	indexA, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, first)
+	indexA, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, first, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
-	indexB, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, second)
+	indexB, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, second, "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,21 +372,21 @@ func TestWriteIndexRejectsBadEntries(t *testing.T) {
 	if err := w.Add(chunkID(t, keys.chunkID, plaintext), plaintext); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Flush(ctx, repo); err != nil {
+	if _, err := w.Flush(ctx, repo, "off"); err != nil {
 		t.Fatal(err)
 	}
 	good := w.Entries()[0]
 
-	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, nil); err == nil {
+	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, nil, "off"); err == nil {
 		t.Fatal("WriteIndex accepted an empty entry list, want rejection")
 	}
 	dup := good
-	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, []pack.Entry{good, dup}); err == nil {
+	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, []pack.Entry{good, dup}, "off"); err == nil {
 		t.Fatal("WriteIndex accepted duplicate entries, want rejection")
 	}
 	bad := good
 	bad.Length = -1
-	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, []pack.Entry{bad}); err == nil {
+	if _, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, []pack.Entry{bad}, "off"); err == nil {
 		t.Fatal("WriteIndex accepted a negative length, want rejection")
 	}
 }
@@ -393,10 +403,10 @@ func TestReadIndexRejectsTampering(t *testing.T) {
 	if err := w.Add(chunkID(t, keys.chunkID, plaintext), plaintext); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Flush(ctx, repo); err != nil {
+	if _, err := w.Flush(ctx, repo, "off"); err != nil {
 		t.Fatal(err)
 	}
-	indexKey, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, w.Entries())
+	indexKey, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, w.Entries(), "off")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,5 +440,79 @@ func TestParseID(t *testing.T) {
 		if _, err := pack.ParseID(bad); err == nil {
 			t.Fatalf("ParseID accepted %q, want rejection", bad)
 		}
+	}
+}
+
+func TestFlushWritesSidecar(t *testing.T) {
+	t.Parallel()
+
+	keys := mustSubkeys(t)
+	repo := mustRepo(t)
+	ctx := t.Context()
+
+	w := pack.NewWriter(testRepoID, keys.data, 0)
+	plaintext := bytes.Repeat([]byte("sidecar pack contents"), 500)
+	if err := w.Add(chunkID(t, keys.chunkID, plaintext), plaintext); err != nil {
+		t.Fatal(err)
+	}
+	packKey, err := w.Flush(ctx, repo, "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists, err := repo.Exists(ctx, packKey+".ecc")
+	if err != nil || !exists {
+		t.Fatalf("pack sidecar missing: exists=%v err=%v", exists, err)
+	}
+	content := readKey(t, repo, packKey)
+	if err := pack.VerifyPack(content, testRepoID, keys.data, packKey); err != nil {
+		t.Fatalf("VerifyPack failed: %v", err)
+	}
+	// Damage the stored pack within budget, repair via the sidecar, and
+	// re-verify the repaired bytes.
+	sidecar := readKey(t, repo, packKey+".ecc")
+	damaged := bytes.Clone(content)
+	damaged[len(damaged)-1] ^= 0x01
+	if err := pack.VerifyPack(damaged, testRepoID, keys.data, packKey); err == nil {
+		t.Fatal("VerifyPack accepted damage, want failure")
+	}
+	fixed := mustRepair(t, damaged, sidecar)
+	if err := pack.VerifyPack(fixed, testRepoID, keys.data, packKey); err != nil {
+		t.Fatalf("repaired pack fails verify: %v", err)
+	}
+}
+
+func TestWriteIndexWritesSidecar(t *testing.T) {
+	t.Parallel()
+
+	keys := mustSubkeys(t)
+	repo := mustRepo(t)
+	ctx := t.Context()
+
+	w := pack.NewWriter(testRepoID, keys.data, 0)
+	plaintext := []byte("indexed with sidecar")
+	if err := w.Add(chunkID(t, keys.chunkID, plaintext), plaintext); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Flush(ctx, repo, "off"); err != nil {
+		t.Fatal(err)
+	}
+	indexKey, err := pack.WriteIndex(ctx, repo, testRepoID, keys.data, w.Entries(), "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists, err := repo.Exists(ctx, indexKey+".ecc")
+	if err != nil || !exists {
+		t.Fatalf("index sidecar missing: exists=%v err=%v", exists, err)
+	}
+	sealed := readKey(t, repo, indexKey)
+	if err := pack.VerifyIndex(sealed, testRepoID, keys.data, indexKey); err != nil {
+		t.Fatalf("VerifyIndex failed: %v", err)
+	}
+	bad := bytes.Clone(sealed)
+	bad[len(bad)-1] ^= 0x01
+	if err := pack.VerifyIndex(bad, testRepoID, keys.data, indexKey); err == nil {
+		t.Fatal("VerifyIndex accepted damage, want failure")
+	} else if !errors.Is(err, pverrors.ErrIntegrity) {
+		t.Fatalf("verify error = %v, want integrity failure", err)
 	}
 }

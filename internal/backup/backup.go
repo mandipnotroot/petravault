@@ -21,10 +21,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"petravault/internal/chunking"
 	"petravault/internal/crypto"
+	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
 	"petravault/internal/pack"
 	"petravault/internal/repository"
@@ -96,6 +98,10 @@ type Options struct {
 	// TargetPackSize overrides the pack fill target; non-positive selects
 	// the pack default.
 	TargetPackSize int
+	// ECC selects the erasure sidecar profile for packs and the index
+	// written by this run: off, low, medium, high, or <N>%. Empty selects
+	// the repository default (DESIGN.md §4.5).
+	ECC string
 	// Logger receives progress and warnings; nil discards logs.
 	Logger *slog.Logger
 }
@@ -182,6 +188,11 @@ func newRunner(ctx context.Context, repo repository.Repository, opts Options) (*
 	}
 	if err := params.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", pverrors.ErrUsage, err)
+	}
+	if strings.TrimSpace(opts.ECC) != "" {
+		if _, err := erasure.Parse(opts.ECC); err != nil {
+			return nil, err
+		}
 	}
 	patterns := slices.Clone(opts.Excludes)
 	if opts.ExcludeFile != "" {
@@ -440,7 +451,7 @@ func (b *runner) forgetPending(added [][32]byte) {
 // flushPack writes the pending pack and merges its entries into the dedup
 // map so later files reuse just-written blobs.
 func (b *runner) flushPack(ctx context.Context) error {
-	key, err := b.writer.Flush(ctx, b.repo)
+	key, err := b.writer.Flush(ctx, b.repo, b.opts.ECC)
 	if err != nil {
 		return err
 	}
@@ -473,7 +484,7 @@ func (b *runner) finish(ctx context.Context) (Result, error) {
 		Warnings:    slices.Clone(b.warnings),
 	}
 	if len(b.writer.Entries()) > 0 {
-		indexKey, err := pack.WriteIndex(ctx, b.repo, b.opts.RepositoryID, b.dataKey, b.writer.Entries())
+		indexKey, err := pack.WriteIndex(ctx, b.repo, b.opts.RepositoryID, b.dataKey, b.writer.Entries(), b.opts.ECC)
 		if err != nil {
 			return Result{}, err
 		}

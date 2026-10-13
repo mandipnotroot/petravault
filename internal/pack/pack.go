@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	json "encoding/json/v2"
 
@@ -176,8 +177,10 @@ func (w *Writer) Entries() []Entry {
 }
 
 // Flush writes the pending chunks as one pack and returns its key. It
-// returns an empty key when nothing is pending.
-func (w *Writer) Flush(ctx context.Context, repo repository.Repository) (string, error) {
+// returns an empty key when nothing is pending. eccSetting selects the parity
+// sidecar written beside the pack: empty defaults to the repository default,
+// off writes none (DESIGN.md §4.5).
+func (w *Writer) Flush(ctx context.Context, repo repository.Repository, eccSetting string) (string, error) {
 	if len(w.blobs) == 0 {
 		return "", nil
 	}
@@ -207,6 +210,9 @@ func (w *Writer) Flush(ctx context.Context, repo repository.Repository) (string,
 	if err := repo.PutObject(ctx, key, bytes.NewReader(content)); err != nil {
 		return "", fmt.Errorf("write pack %s: %w", key, err)
 	}
+	if err := repository.WriteSidecar(ctx, repo, key, content, eccSetting); err != nil {
+		return "", err
+	}
 	base := int64(8 + len(sealedHeader))
 	offset := base
 	for i, id := range w.ids {
@@ -235,6 +241,30 @@ func ListPack(ctx context.Context, repo repository.Repository, repoID string, da
 		return nil, err
 	}
 	return parsePack(content, repoID, dataKey, packKey)
+}
+
+// VerifyPack authenticates every byte of one pack held in memory: the header
+// and each chunk blob bound to its chunk ID. It backs repair-then-verify
+// flows (DESIGN.md §4.5) that must check repaired bytes without rereading
+// storage. Failures wrap ErrIntegrity and yield no plaintext.
+func VerifyPack(content []byte, repoID string, dataKey crypto.SecretKey, packKey string) error {
+	refs, err := parsePack(content, repoID, dataKey, packKey)
+	if err != nil {
+		return err
+	}
+	headerLen := binary.BigEndian.Uint64(content[:8])
+	rest := content[8+headerLen:]
+	for _, ref := range refs {
+		if int64(len(rest)) < ref.Length {
+			return fmt.Errorf("pack %s holds an invalid length for chunk %s", packKey, FormatID(ref.ID))
+		}
+		blob := rest[:ref.Length]
+		if _, err := dataKey.Open(blob, crypto.AssociatedData(repoID, ObjectChunk, FormatID(ref.ID))); err != nil {
+			return fmt.Errorf("open chunk %s in pack %s: %w", FormatID(ref.ID), packKey, err)
+		}
+		rest = rest[ref.Length:]
+	}
+	return nil
 }
 
 // ReadChunk fetches one chunk blob with a ranged read, authenticates it,
@@ -269,8 +299,9 @@ func ReadChunk(ctx context.Context, repo repository.Repository, repoID string, d
 
 // WriteIndex seals entries as one immutable index object and returns its
 // key. Entries are sorted by ID before sealing, so the stored bytes are
-// deterministic.
-func WriteIndex(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, entries []Entry) (string, error) {
+// deterministic. eccSetting selects the parity sidecar written beside the
+// index: empty defaults to the repository default, off writes none.
+func WriteIndex(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, entries []Entry, eccSetting string) (string, error) {
 	if len(entries) == 0 {
 		return "", errors.New("refusing to write an empty index")
 	}
@@ -308,7 +339,18 @@ func WriteIndex(ctx context.Context, repo repository.Repository, repoID string, 
 	if err := repo.PutObject(ctx, key, bytes.NewReader(sealed)); err != nil {
 		return "", fmt.Errorf("write index %s: %w", key, err)
 	}
+	if err := repository.WriteSidecar(ctx, repo, key, sealed, eccSetting); err != nil {
+		return "", err
+	}
 	return key, nil
+}
+
+// VerifyIndex authenticates one index held in memory. It backs
+// repair-then-verify flows that must check repaired bytes without rereading
+// storage. Failures wrap ErrIntegrity.
+func VerifyIndex(sealed []byte, repoID string, dataKey crypto.SecretKey, indexKey string) error {
+	_, err := decodeIndex(sealed, repoID, dataKey, indexKey)
+	return err
 }
 
 // ReadIndex verifies and decodes one index object.
@@ -317,6 +359,10 @@ func ReadIndex(ctx context.Context, repo repository.Repository, repoID string, d
 	if err != nil {
 		return nil, err
 	}
+	return decodeIndex(sealed, repoID, dataKey, indexKey)
+}
+
+func decodeIndex(sealed []byte, repoID string, dataKey crypto.SecretKey, indexKey string) ([]Entry, error) {
 	raw, err := dataKey.Open(sealed, crypto.AssociatedData(repoID, ObjectIndex, ""))
 	if err != nil {
 		return nil, fmt.Errorf("open index %s: %w", indexKey, err)
@@ -345,13 +391,21 @@ func ReadIndex(ctx context.Context, repo repository.Repository, repoID string, d
 	return out, nil
 }
 
-// ListIndexKeys returns the sorted keys of all index objects.
+// ListIndexKeys returns the sorted keys of all index objects, excluding
+// parity sidecars (DESIGN.md §4.5).
 func ListIndexKeys(ctx context.Context, repo repository.Repository) ([]string, error) {
 	keys, err := repo.List(ctx, IndexPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list indexes: %w", err)
 	}
-	return keys, nil
+	out := keys[:0]
+	for _, k := range keys {
+		if strings.HasSuffix(k, ".ecc") {
+			continue
+		}
+		out = append(out, k)
+	}
+	return out, nil
 }
 
 // LoadEntries merges every index into a chunk-ID map for dedup lookups. Keys
