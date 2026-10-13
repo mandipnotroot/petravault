@@ -42,7 +42,7 @@ func newSnapshotsListCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
 				return err
 			}
@@ -116,7 +116,7 @@ func newSnapshotsShowCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
 				return err
 			}

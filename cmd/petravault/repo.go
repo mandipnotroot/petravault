@@ -25,25 +25,41 @@ import (
 	pverrors "petravault/internal/errors"
 )
 
-// resolveRepoPath picks the repository for every command except init and
-// refuses S3 addresses until the S3 backend lands (phase 9).
+// resolveRepoPath picks the repository for every command except init:
+// --repository, then PETRAVAULT_REPOSITORY, then default_repository.
 func resolveRepoPath(cfg config.Config, flag string) (string, error) {
 	repoPath := cfg.ResolveRepository(flag)
 	if repoPath == "" {
 		return "", fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 	}
-	if strings.HasPrefix(repoPath, "s3:") {
-		return "", fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
-	}
 	return repoPath, nil
 }
 
-// openVerifiedRepo opens the local repository and verifies its signed
+// s3OptionsForConfig maps the human-edited S3 settings to client options.
+// Credentials never appear here; the SDK-standard chain supplies them
+// (DESIGN.md §7, §8).
+func s3OptionsForConfig(cfg config.Config) repository.S3Options {
+	return repository.S3Options{
+		Profile: cfg.S3.Profile,
+		Region:  cfg.S3.Region,
+	}
+}
+
+// openRepo opens the repository at repoPath: an S3 repository for
+// s3:<bucket>[/<prefix>] addresses, a local one otherwise (DESIGN.md §8).
+func openRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, error) {
+	return repository.Open(ctx, repoPath, s3OptionsForConfig(cfg))
+}
+
+// openVerifiedRepo opens the repository and verifies its signed
 // config against the client-local trust list. It returns the repository,
 // its verified config, and the trust material callers need to open key
 // slots and snapshots.
-func openVerifiedRepo(ctx context.Context, repoPath string) (*repository.Local, repository.Config, *identity.TrustStore, map[string][]byte, error) {
-	repo := repository.NewLocal(repoPath)
+func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
+	repo, err := openRepo(ctx, cfg, repoPath)
+	if err != nil {
+		return nil, repository.Config{}, nil, nil, err
+	}
 	trust := identity.NewTrustStore(trustDir())
 	trusted, err := listTrustedSigners(trust)
 	if err != nil {
@@ -59,7 +75,7 @@ func openVerifiedRepo(ctx context.Context, repoPath string) (*repository.Local, 
 // openMaster unlocks the signer's private identity and opens its key slot,
 // proving the signer holds read access. The granter must be in the client's
 // own trust list; a slot signed by anyone else is refused.
-func openMaster(ctx context.Context, f *flags, cfg config.Config, repo *repository.Local, trust *identity.TrustStore, repoID string) (crypto.SecretKey, *identity.PrivateIdentity, *identity.Identity, error) {
+func openMaster(ctx context.Context, f *flags, cfg config.Config, repo repository.Repository, trust *identity.TrustStore, repoID string) (crypto.SecretKey, *identity.PrivateIdentity, *identity.Identity, error) {
 	signer, err := resolveSigner(f, cfg)
 	if err != nil {
 		return crypto.SecretKey{}, nil, nil, err
@@ -171,7 +187,7 @@ func manifestToBackup(files []manifest.File) []backup.FileEntry {
 // (empty for the first backup), its entries for the fast path, and its
 // creation time for the racily-clean guard. A forked chain is an integrity
 // failure, never a silent pick of a winner.
-func parentForSource(ctx context.Context, repo *repository.Local, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte) (string, []backup.FileEntry, time.Time, error) {
+func parentForSource(ctx context.Context, repo repository.Repository, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte) (string, []backup.FileEntry, time.Time, error) {
 	ids, err := manifest.List(ctx, repo)
 	if err != nil {
 		return "", nil, time.Time{}, err

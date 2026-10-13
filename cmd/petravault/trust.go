@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 
 	"petravault/internal/config"
 	"petravault/internal/crypto"
@@ -158,10 +157,10 @@ func grantReadAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *sl
 	if repoPath == "" {
 		return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 	}
-	if strings.HasPrefix(repoPath, "s3:") {
-		return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
+	repo, err := openRepo(ctx, cfg, repoPath)
+	if err != nil {
+		return err
 	}
-	repo := repository.NewLocal(repoPath)
 	trusted, err := listTrustedSigners(trust)
 	if err != nil {
 		return err
@@ -218,7 +217,7 @@ func grantReadAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *sl
 // openGranterSlot opens the granter's own slot, proving the granter holds
 // read access. The granter must be in the client's own trust list; a slot
 // signed by anyone else is refused (DESIGN.md §4.2, §5.2).
-func openGranterSlot(ctx context.Context, repo *repository.Local, trust *identity.TrustStore, repositoryID string, granterPriv *identity.PrivateIdentity) (crypto.SecretKey, error) {
+func openGranterSlot(ctx context.Context, repo repository.Repository, trust *identity.TrustStore, repositoryID string, granterPriv *identity.PrivateIdentity) (crypto.SecretKey, error) {
 	key := identity.SlotKey(granterPriv.Fingerprint())
 	r, err := repo.GetObject(ctx, key)
 	if err != nil {

@@ -50,7 +50,7 @@ func newBackupCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
 				return err
 			}
@@ -164,7 +164,7 @@ func shouldVerifyAfterBackup(cfg config.Config, wantVerify, wantNoVerify bool) b
 // verifyOne runs a standard or deep verification of one snapshot. It is
 // shared by backup --verify and the verify command so both enforce the
 // same signature, trust, history, and chunk checks.
-func verifyOne(ctx context.Context, repo *repository.Local, repoCfg repository.Config, dataKey, chunkIDKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte, snapshotID, headsPath string, deep bool, maxChunk int, logger *slog.Logger) error {
+func verifyOne(ctx context.Context, repo repository.Repository, repoCfg repository.Config, dataKey, chunkIDKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte, snapshotID, headsPath string, deep bool, maxChunk int, logger *slog.Logger) error {
 	_, err := verify.Verify(ctx, repo, repoCfg, dataKey, chunkIDKey, trust, trusted, verify.Options{
 		SnapshotID:   snapshotID,
 		Deep:         deep,

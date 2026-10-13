@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"petravault/internal/chunking"
@@ -115,8 +114,8 @@ func setup(f *flags, stderr io.Writer) (config.Config, *slog.Logger, error) {
 func newInitCmd(f *flags) *cobra.Command {
 	var ecc string
 	cmd := &cobra.Command{
-		Use:   "init [path]",
-		Short: "Create a new local repository",
+		Use:   "init [path|s3:bucket[/prefix]]",
+		Short: "Create a new repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())
@@ -124,9 +123,6 @@ func newInitCmd(f *flags) *cobra.Command {
 				return err
 			}
 			path := args[0]
-			if strings.HasPrefix(path, "s3:") {
-				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
-			}
 			creator, err := resolveSigner(f, cfg)
 			if err != nil {
 				return err
@@ -140,9 +136,17 @@ func newInitCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, err := repository.Init(path)
-			if err != nil {
-				return err
+			var repo repository.Repository
+			if repository.IsS3Address(path) {
+				repo, err = repository.OpenS3(cmd.Context(), path, s3OptionsForConfig(cfg))
+				if err != nil {
+					return err
+				}
+			} else {
+				repo, err = repository.Init(path)
+				if err != nil {
+					return err
+				}
 			}
 			if err := initRepository(cmd.Context(), repo, creatorPriv, creator, ecc); err != nil {
 				return err
@@ -152,9 +156,9 @@ func newInitCmd(f *flags) *cobra.Command {
 				return err
 			}
 			logger.Info("repository initialized",
-				slog.String("path", repo.Root()),
+				slog.String("path", path),
 				slog.String("ecc", params.Describe()))
-			fmt.Fprintf(cmd.OutOrStdout(), "initialized repository at %s\necc: %s\n", repo.Root(), params.Describe())
+			fmt.Fprintf(cmd.OutOrStdout(), "initialized repository at %s\necc: %s\n", path, params.Describe())
 			return nil
 		},
 	}
@@ -165,7 +169,7 @@ func newInitCmd(f *flags) *cobra.Command {
 // initRepository creates the repository ID, master key, signed config, and
 // creator key slot (DESIGN.md §4.2, §8). It refuses to overwrite an existing
 // config: re-initializing with a new master key would orphan every backup.
-func initRepository(ctx context.Context, repo *repository.Local, creatorPriv *identity.PrivateIdentity, creator *identity.Identity, ecc string) error {
+func initRepository(ctx context.Context, repo repository.Repository, creatorPriv *identity.PrivateIdentity, creator *identity.Identity, ecc string) error {
 	exists, err := repo.Exists(ctx, repository.ConfigKey)
 	if err != nil {
 		return err
@@ -220,10 +224,10 @@ func newInfoCmd(f *flags) *cobra.Command {
 			if repoPath == "" {
 				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 			}
-			if strings.HasPrefix(repoPath, "s3:") {
-				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
+			repo, err := openRepo(cmd.Context(), cfg, repoPath)
+			if err != nil {
+				return err
 			}
-			repo := repository.NewLocal(repoPath)
 			trusted, err := listTrustedSigners(identity.NewTrustStore(trustDir()))
 			if err != nil {
 				return err

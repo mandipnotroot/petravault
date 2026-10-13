@@ -49,10 +49,10 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if repoPath == "" {
 				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 			}
-			if strings.HasPrefix(repoPath, "s3:") {
-				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
+			repo, err := openRepo(cmd.Context(), cfg, repoPath)
+			if err != nil {
+				return err
 			}
-			repo := repository.NewLocal(repoPath)
 			trust := identity.NewTrustStore(trustDir())
 			trusted, err := listTrustedSigners(trust)
 			if err != nil {
@@ -105,10 +105,10 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if repoPath == "" {
 				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 			}
-			if strings.HasPrefix(repoPath, "s3:") {
-				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
+			repo, err := openRepo(cmd.Context(), cfg, repoPath)
+			if err != nil {
+				return err
 			}
-			repo := repository.NewLocal(repoPath)
 			trust := identity.NewTrustStore(trustDir())
 			trusted, err := listTrustedSigners(trust)
 			if err != nil {
