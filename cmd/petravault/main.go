@@ -20,6 +20,7 @@ import (
 	"petravault/internal/chunking"
 	"petravault/internal/config"
 	"petravault/internal/crypto"
+	"petravault/internal/erasure"
 	"petravault/internal/identity"
 	"petravault/internal/repository"
 
@@ -79,6 +80,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(newInitCmd(&f))
 	root.AddCommand(newInfoCmd(&f))
+	root.AddCommand(newECCCmd(&f))
 	root.AddCommand(newIdentityCmd(&f))
 	root.AddCommand(newTrustCmd(&f))
 	root.AddCommand(newVersionCmd())
@@ -141,8 +143,14 @@ func newInitCmd(f *flags) *cobra.Command {
 			if err := initRepository(cmd.Context(), repo, creatorPriv, creator, ecc); err != nil {
 				return err
 			}
-			logger.Info("repository initialized", slog.String("path", repo.Root()))
-			fmt.Fprintf(cmd.OutOrStdout(), "initialized repository at %s\n", repo.Root())
+			params, err := erasure.Resolve(ecc)
+			if err != nil {
+				return err
+			}
+			logger.Info("repository initialized",
+				slog.String("path", repo.Root()),
+				slog.String("ecc", params.Describe()))
+			fmt.Fprintf(cmd.OutOrStdout(), "initialized repository at %s\necc: %s\n", repo.Root(), params.Describe())
 			return nil
 		},
 	}
@@ -208,7 +216,30 @@ func newInfoCmd(f *flags) *cobra.Command {
 			if repoPath == "" {
 				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "repository: %s\n", repoPath)
+			if strings.HasPrefix(repoPath, "s3:") {
+				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
+			}
+			repo := repository.NewLocal(repoPath)
+			trusted, err := listTrustedSigners(identity.NewTrustStore(trustDir()))
+			if err != nil {
+				return err
+			}
+			repoCfg, signer, err := repository.ReadConfig(cmd.Context(), repo, trusted)
+			if err != nil {
+				return err
+			}
+			params, err := erasure.Resolve(repoCfg.ECC)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "repository: %s\n", repoPath)
+			fmt.Fprintf(out, "repository_id: %s\n", repoCfg.RepositoryID)
+			fmt.Fprintf(out, "crypto_suite: %s\n", repoCfg.CryptoSuite)
+			fmt.Fprintf(out, "chunking: %s (%s)\n", repoCfg.ChunkingAlgorithm, repoCfg.ChunkingLibraryVersion)
+			fmt.Fprintf(out, "pack_size: %d\n", repoCfg.PackSize)
+			fmt.Fprintf(out, "ecc: %s\n", params.Describe())
+			fmt.Fprintf(out, "signed_by: %s\n", signer)
 			return nil
 		},
 	}
