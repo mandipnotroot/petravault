@@ -21,6 +21,7 @@ import (
 
 	"petravault/internal/chunking"
 	"petravault/internal/crypto"
+	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
 )
 
@@ -339,27 +340,13 @@ func decodeConfigEnvelope(envBytes []byte) (payload, sig []byte, err error) {
 	return payload, sig, nil
 }
 
-// validateECC accepts off, a named profile, or a custom percentage. Full
-// overhead-to-shard derivation lands in phase 7; this only guards the vocab
-// so repository.json already carries a sane default.
+// validateECC accepts off, a named profile, or a custom percentage and
+// derives its shard counts with integer math (DESIGN.md §4.5). Out-of-range
+// percentages and shard combinations beyond the Reed-Solomon limit fail
+// closed as usage errors.
 func validateECC(s string) error {
-	switch strings.ToLower(s) {
-	case "off", "low", "medium", "high":
-		return nil
-	}
-	v, ok := strings.CutSuffix(s, "%")
-	if !ok || v == "" {
-		return fmt.Errorf("%w: invalid ecc %q: want off, low, medium, high, or <N>%%", pverrors.ErrUsage, s)
-	}
-	dots := 0
-	for i := range len(v) {
-		switch {
-		case v[i] >= '0' && v[i] <= '9':
-		case v[i] == '.' && dots == 0:
-			dots++
-		default:
-			return fmt.Errorf("%w: invalid ecc %q: want off, low, medium, high, or <N>%%", pverrors.ErrUsage, s)
-		}
+	if _, err := erasure.Parse(s); err != nil {
+		return err
 	}
 	return nil
 }
