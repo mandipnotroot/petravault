@@ -1,0 +1,14 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Petravault
+Upstream-Contact: Petravault Contributors
+Source: https://reuse.software/
+
+# The license texts themselves carry no per-file header by design.
+Files: LICENSE LICENSES/*
+Copyright: 2007 Free Software Foundation, Inc. <https://fsf.org/>
+License: GPL-3.0-only
+
+# Generated files carry no per-file header by design.
+Files: go.sum
+Copyright: 2026 Petravault Contributors
+License: GPL-3.0-only

@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Petravault Contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Build output
+bin/
+
+# Test and coverage artifacts
+coverage.out
+coverage.html
+*.coverprofile
+*.test
+
+# Local tool state (never commit)
+.agents/
+skills-lock.json
