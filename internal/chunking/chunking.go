@@ -12,6 +12,7 @@ package chunking
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -151,7 +152,7 @@ func SplitAll(r io.Reader, p Params, key []byte) ([][]byte, error) {
 		if len(chunk) > 0 {
 			out = append(out, chunk)
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return out, nil
 		}
 		if err != nil {

@@ -237,6 +237,7 @@ func TestSecretKeyBytesRoundTrip(t *testing.T) {
 		t.Fatal("mutating Bytes output altered the key; want an owned copy")
 	}
 }
+
 func TestNewKeyFromBytesRejectsBadLength(t *testing.T) {
 	t.Parallel()
 

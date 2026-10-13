@@ -5,6 +5,7 @@ package chunking_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"slices"
 	"testing"
@@ -47,7 +48,7 @@ func testData(n int, seed uint64) []byte {
 }
 
 func offsetsOf(chunks [][]byte) []int {
-	var offs []int
+	offs := make([]int, 0, len(chunks))
 	acc := 0
 	for _, c := range chunks {
 		acc += len(c)
@@ -134,9 +135,9 @@ func TestGoldenBoundaries(t *testing.T) {
 	p := testParams()
 	key := testKey()
 	for _, tt := range []struct {
-		name  string
-		data  []byte
-		want  []int
+		name string
+		data []byte
+		want []int
 	}{
 		{name: "empty", data: nil, want: nil},
 		{name: "smaller than min", data: testData(48, 1), want: []int{48}},
@@ -221,7 +222,7 @@ func TestNextOwnsMemory(t *testing.T) {
 		if len(chunk) > 0 {
 			chunks = append(chunks, chunk)
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

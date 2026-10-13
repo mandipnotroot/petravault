@@ -18,7 +18,7 @@ func TestRoundTrip(t *testing.T) {
 		nil,
 		{},
 		[]byte("backup chunk bytes"),
-		bytes.Repeat([]byte("a"), 1 << 20),
+		bytes.Repeat([]byte("a"), 1<<20),
 		bytes.Repeat([]byte("0123456789abcdef"), 1<<16),
 	}
 	for _, in := range inputs {
