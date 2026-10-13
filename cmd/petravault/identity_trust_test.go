@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"petravault/internal/crypto"
+	"petravault/internal/identity"
+	"petravault/internal/repository"
 )
 
 func isolatedIdentityEnv(t *testing.T, password string) {
@@ -163,11 +167,101 @@ func TestTrustRevokeRequiresReason(t *testing.T) {
 	}
 }
 
-func TestTrustGrantReadNotYet(t *testing.T) {
+func TestTrustGrantRead(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+
+	// Alice grants Bob read access. Bob is already trusted locally from
+	// creation; re-adding is idempotent and then seals the master key.
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-read")
+
+	if got := countSuffix(t, filepath.Join(root, "keys"), ".slot"); got != 2 {
+		t.Fatalf("keys dir holds %d slots, want alice plus bob", got)
+	}
+	if got := countSuffix(t, filepath.Join(root, "identities"), ".pub"); got != 2 {
+		t.Fatalf("identities dir holds %d copies, want alice plus bob", got)
+	}
+
+	// Both slots open to the same master key.
+	aliceParsed, err := identity.ParseFingerprint(aliceFP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobParsed, err := identity.ParseFingerprint(bobFP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := identity.NewStore(keystoreDir())
+	alicePriv, err := store.LoadPrivate(aliceParsed, []byte("test-password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobPriv, err := store.LoadPrivate(bobParsed, []byte("test-password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := identity.NewTrustStore(trustDir())
+	trusted, err := trust.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byFP := make(map[string][]byte, len(trusted))
+	for _, id := range trusted {
+		byFP[id.Fingerprint.String()] = id.SignPublic
+	}
+	repo := repository.NewLocal(root)
+	ctx := context.Background()
+	repoCfg, _, err := repository.ReadConfig(ctx, repo, byFP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(granter string) ([]byte, error) {
+		fp, err := identity.ParseFingerprint(granter)
+		if err != nil {
+			return nil, err
+		}
+		id, err := trust.TrustedPublic(fp)
+		if err != nil {
+			return nil, err
+		}
+		return id.SignPublic, nil
+	}
+	aliceMaster, err := openSlotForTest(t, root, repoCfg.RepositoryID, aliceParsed, alicePriv, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aliceMaster.Zero()
+	bobMaster, err := openSlotForTest(t, root, repoCfg.RepositoryID, bobParsed, bobPriv, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bobMaster.Zero()
+	if !aliceMaster.Equal(bobMaster) {
+		t.Fatal("alice and bob slots hold different master keys")
+	}
+}
+
+func openSlotForTest(t *testing.T, root, repositoryID string, fp identity.Fingerprint, priv *identity.PrivateIdentity, lookup func(string) ([]byte, error)) (crypto.SecretKey, error) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, identity.SlotKey(fp)))
+	if err != nil {
+		return crypto.SecretKey{}, err
+	}
+	return identity.OpenSlotTrusted(raw, repositoryID, fp, priv.KEMPrivate(), lookup)
+}
+
+func TestTrustGrantReadRejectsUnknownRepository(t *testing.T) {
 	isolatedIdentityEnv(t, "test-password")
 	out, _ := runCmd(t, "identity", "create", "--name", "alice")
 	fp := fingerprintFromCreate(t, out)
-	if err := runCmdErr(t, "trust", "add", fp, "--grant-read"); err == nil {
-		t.Fatal("trust add --grant-read succeeded before phase 6")
+	missing := filepath.Join(t.TempDir(), "no-repo")
+	if err := runCmdErr(t, "--repository", missing, "trust", "add", fp, "--grant-read"); err == nil {
+		t.Fatal("trust add --grant-read succeeded without a repository")
 	}
 }

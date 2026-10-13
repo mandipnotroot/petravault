@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -16,7 +17,10 @@ import (
 	"strings"
 	"syscall"
 
+	"petravault/internal/chunking"
 	"petravault/internal/config"
+	"petravault/internal/crypto"
+	"petravault/internal/identity"
 	"petravault/internal/repository"
 
 	"github.com/spf13/cobra"
@@ -103,12 +107,13 @@ func setup(f *flags, stderr io.Writer) (config.Config, *slog.Logger, error) {
 }
 
 func newInitCmd(f *flags) *cobra.Command {
-	return &cobra.Command{
+	var ecc string
+	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Create a new local repository",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, logger, err := setup(f, cmd.ErrOrStderr())
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -116,8 +121,24 @@ func newInitCmd(f *flags) *cobra.Command {
 			if strings.HasPrefix(path, "s3:") {
 				return fmt.Errorf("%w: s3 repositories are not supported yet", pverrors.ErrUsage)
 			}
+			creator, err := resolveSigner(f, cfg)
+			if err != nil {
+				return err
+			}
+			password, err := identity.ReadPassword(cmd.Context(), "Enter password for repository creator: ")
+			if err != nil {
+				return err
+			}
+			defer clear(password)
+			creatorPriv, err := identity.NewStore(keystoreDir()).LoadPrivate(creator.Fingerprint, password)
+			if err != nil {
+				return err
+			}
 			repo, err := repository.Init(path)
 			if err != nil {
+				return err
+			}
+			if err := initRepository(cmd.Context(), repo, creatorPriv, creator, ecc); err != nil {
 				return err
 			}
 			logger.Info("repository initialized", slog.String("path", repo.Root()))
@@ -125,6 +146,52 @@ func newInitCmd(f *flags) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&ecc, "ecc", "medium", "erasure profile: off, low, medium, high, or <N>%")
+	return cmd
+}
+
+// initRepository creates the repository ID, master key, signed config, and
+// creator key slot (DESIGN.md §4.2, §8). It refuses to overwrite an existing
+// config: re-initializing with a new master key would orphan every backup.
+func initRepository(ctx context.Context, repo *repository.Local, creatorPriv *identity.PrivateIdentity, creator *identity.Identity, ecc string) error {
+	exists, err := repo.Exists(ctx, repository.ConfigKey)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("%w: repository is already initialized", pverrors.ErrUsage)
+	}
+	repositoryID, err := repository.GenerateID()
+	if err != nil {
+		return err
+	}
+	repoCfg, err := repository.NewConfig(repositoryID, chunking.DefaultParams(), 0, ecc, nil)
+	if err != nil {
+		return err
+	}
+	if err := repository.WriteConfig(ctx, repo, creatorPriv, repoCfg); err != nil {
+		return err
+	}
+	master, err := crypto.GenerateKey()
+	if err != nil {
+		return err
+	}
+	defer master.Zero()
+	env, err := identity.SealSlot(creatorPriv, repositoryID, creator, master)
+	if err != nil {
+		return err
+	}
+	if err := repo.PutObject(ctx, identity.SlotKey(creator.Fingerprint), bytes.NewReader(env)); err != nil {
+		return fmt.Errorf("write key slot: %w", err)
+	}
+	pubBytes, err := identity.MarshalPublic(creator)
+	if err != nil {
+		return err
+	}
+	if err := repo.PutObject(ctx, identity.AdvisoryKey(creator.Fingerprint), bytes.NewReader(pubBytes)); err != nil {
+		return fmt.Errorf("write advisory copy: %w", err)
+	}
+	return nil
 }
 
 func newInfoCmd(f *flags) *cobra.Command {

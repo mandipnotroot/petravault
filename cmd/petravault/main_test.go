@@ -33,8 +33,14 @@ func TestVersion(t *testing.T) {
 }
 
 func TestInitAndInfo(t *testing.T) {
-	// Serial: isolatedEnv uses t.Setenv, which parallel tests forbid.
-	isolatedEnv(t)
+	// Serial: isolatedIdentityEnv uses t.Setenv, which parallel tests forbid.
+	isolatedIdentityEnv(t, "test-password")
+
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+	if fp == "" {
+		t.Fatal("empty fingerprint")
+	}
 
 	root := filepath.Join(t.TempDir(), "repo")
 	var stdout, stderr bytes.Buffer
@@ -44,6 +50,15 @@ func TestInitAndInfo(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join(root, "packs")); err != nil || !fi.IsDir() {
 		t.Fatalf("init did not create layout: %v", err)
 	}
+	if fi, err := os.Stat(filepath.Join(root, "config", "repository.json")); err != nil || fi.IsDir() {
+		t.Fatalf("init did not write signed config: %v", err)
+	}
+	if got := countSuffix(t, filepath.Join(root, "keys"), ".slot"); got != 1 {
+		t.Fatalf("keys dir holds %d slots, want 1 for the creator", got)
+	}
+	if got := countSuffix(t, filepath.Join(root, "identities"), ".pub"); got != 1 {
+		t.Fatalf("identities dir holds %d copies, want 1 for the creator", got)
+	}
 
 	stdout.Reset()
 	if err := run(context.Background(), []string{"--repository", root, "info"}, &stdout, &stderr); err != nil {
@@ -52,6 +67,21 @@ func TestInitAndInfo(t *testing.T) {
 	if !strings.Contains(stdout.String(), root) {
 		t.Fatalf("info output = %q, want repository path", stdout.String())
 	}
+}
+
+func countSuffix(t *testing.T, dir, suffix string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
+			n++
+		}
+	}
+	return n
 }
 
 func TestInfoWithoutRepositoryIsUsageError(t *testing.T) {
