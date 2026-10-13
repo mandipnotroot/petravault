@@ -80,6 +80,10 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(newInitCmd(&f))
 	root.AddCommand(newInfoCmd(&f))
+	root.AddCommand(newBackupCmd(&f))
+	root.AddCommand(newSnapshotsCmd(&f))
+	root.AddCommand(newRestoreCmd(&f))
+	root.AddCommand(newVerifyCmd(&f))
 	root.AddCommand(newECCCmd(&f))
 	root.AddCommand(newIdentityCmd(&f))
 	root.AddCommand(newTrustCmd(&f))
