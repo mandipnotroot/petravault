@@ -163,9 +163,9 @@ The directory tree is in DESIGN.md §14. Rules for working inside it:
 ```go
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 	}
@@ -173,7 +173,8 @@ func main() {
 }
 ```
 
-(`defer stop()` does not run before `os.Exit`; that is acceptable here because the process ends and the OS reclaims the signal handler.)
+(`stop()` is called explicitly before `os.Exit` instead of `defer stop()`,
+which would never run and trips the `exitAfterDefer` check.)
 
 ---
 
@@ -416,7 +417,7 @@ jobs:
       - name: Install REUSE tool
         run: pipx install fsfe-reuse
       - name: Formatting
-        run: go tool golangci-lint fmt --check ./...
+        run: go tool golangci-lint fmt --diff ./...
       - name: Modules are tidy
         run: |
           go mod tidy

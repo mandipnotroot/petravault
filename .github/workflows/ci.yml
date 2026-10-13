@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Petravault Contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install REUSE tool
+        run: pipx install fsfe-reuse
+      - name: Formatting
+        run: go tool golangci-lint fmt --diff ./...
+      - name: Modules are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - run: go mod verify
+      - run: go vet ./...
+      - run: go tool golangci-lint run
+      - run: go build ./...
+      - run: go test -race -shuffle=on -count=1 ./...
+      - name: Fuzz chunker briefly
+        run: go test -run='^$' -fuzz=FuzzChunker -fuzztime=30s ./internal/chunking
+      - run: go tool govulncheck ./...
+      - run: make license
+      - run: make reuse
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
