@@ -13,6 +13,7 @@ tool (
 require (
 	github.com/PlakarKorp/go-cdc-chunkers v1.1.0
 	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/reedsolomon v1.14.2
 	github.com/spf13/cobra v1.10.2
 	github.com/zeebo/blake3 v0.2.4
 	go.yaml.in/yaml/v3 v3.0.5
@@ -130,7 +131,7 @@ require (
 	github.com/karamaru-alpha/copyloopvar v1.2.2 // indirect
 	github.com/kisielk/errcheck v1.20.0 // indirect
 	github.com/kkHAIKE/contextcheck v1.1.6 // indirect
-	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kulti/thelper v0.7.1 // indirect
 	github.com/kunwardeep/paralleltest v1.0.15 // indirect
 	github.com/ldez/exptostd v0.4.5 // indirect
