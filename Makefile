@@ -32,13 +32,15 @@ vuln:
 	go tool govulncheck ./...
 
 # Only GPL-3.0-compatible licenses (DESIGN.md §6): permissive licenses plus
-# GPL-3.0-only itself. --ignore drops the scanned module's own packages, so
-# the project's own GPL-3.0-only license (governed by REUSE, see reuse
-# target) is not judged as a dependency; GPL-3.0 without the -only qualifier
-# stays rejected.
+# GPL-3.0-only itself. CC0-1.0 is the public-domain dedication of the approved
+# BLAKE3 library (github.com/zeebo/blake3) and its use here was reviewed when
+# DESIGN.md §6 adopted that library. --ignore drops the scanned module's own
+# packages, so the project's own GPL-3.0-only license (governed by REUSE, see
+# reuse target) is not judged as a dependency; GPL-3.0 without the -only
+# qualifier stays rejected.
 license:
 	go run github.com/google/go-licenses@latest check ./... --ignore petravault \
-		--allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,ISC,Apache-2.0,GPL-3.0-only
+		--allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,ISC,Apache-2.0,CC0-1.0,GPL-3.0-only
 
 reuse:
 	reuse lint
