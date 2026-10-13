@@ -273,6 +273,10 @@ type CommitParams struct {
 	CreatedAt time.Time
 	// Files must be ordered by path with no duplicates.
 	Files []File
+	// ECC selects the erasure sidecar profile for the snapshot object:
+	// off, low, medium, high, or <N>%. Empty selects the repository
+	// default (DESIGN.md §4.5).
+	ECC string
 }
 
 // Commit builds the manifest, signs it, encrypts the envelope, and writes
@@ -327,7 +331,45 @@ func Commit(ctx context.Context, repo repository.Repository, dataKey crypto.Secr
 	if err := repo.PutObject(ctx, key, bytes.NewReader(sealed)); err != nil {
 		return "", fmt.Errorf("write snapshot %s: %w", hexID, err)
 	}
+	if err := repository.WriteSidecar(ctx, repo, key, sealed, p.ECC); err != nil {
+		return "", err
+	}
 	return hexID, nil
+}
+
+// VerifySnapshot authenticates one snapshot object held in memory: AEAD
+// opening, envelope decoding, ID binding, signature verification with
+// signPub, and manifest validation. It backs repair-then-verify flows that
+// must check repaired bytes without rereading storage. Failures wrap
+// ErrIntegrity where they indicate tampering.
+func VerifySnapshot(sealed []byte, repoID string, dataKey crypto.SecretKey, snapshotID string, signPub []byte) error {
+	id, err := ParseSnapshotID(snapshotID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", pverrors.ErrUsage, err)
+	}
+	hexID := FormatSnapshotID(id)
+	envPlain, err := dataKey.Open(sealed, crypto.AssociatedData(repoID, ObjectSnapshot, hexID))
+	if err != nil {
+		return fmt.Errorf("open snapshot %s: %w", hexID, err)
+	}
+	payload, sig, err := decodeEnvelope(envPlain)
+	if err != nil {
+		return err
+	}
+	if got := FormatSnapshotID(SnapshotID(payload)); got != hexID {
+		return fmt.Errorf("snapshot %s: %w: id mismatch", hexID, pverrors.ErrIntegrity)
+	}
+	if err := Verify(signPub, payload, sig); err != nil {
+		return fmt.Errorf("snapshot %s: %w", hexID, err)
+	}
+	var m Manifest
+	if err := json.Unmarshal(payload, &m, json.RejectUnknownMembers(true)); err != nil {
+		return fmt.Errorf("decode snapshot %s: %w", hexID, err)
+	}
+	if err := m.Validate(repoID); err != nil {
+		return fmt.Errorf("snapshot %s: %w", hexID, err)
+	}
+	return nil
 }
 
 // Open decrypts the snapshot object, verifies its signature with signPub,
@@ -430,6 +472,27 @@ func decodeEnvelope(envBytes []byte) (payload, sig []byte, err error) {
 	return payload, sig, nil
 }
 
+// UnverifiedIdentity returns the identity hint from a decrypted snapshot
+// envelope without verifying anything. The hint is untrusted: callers must
+// resolve it against their client-local trust list and verify the envelope
+// with the resolved key before use.
+func UnverifiedIdentity(envPlain []byte) (string, error) {
+	payload, _, err := decodeEnvelope(envPlain)
+	if err != nil {
+		return "", err
+	}
+	var hint struct {
+		Identity string `json:"identity"`
+	}
+	if err := json.Unmarshal(payload, &hint); err != nil {
+		return "", fmt.Errorf("decode snapshot identity hint: %w", err)
+	}
+	if hint.Identity == "" {
+		return "", fmt.Errorf("%w: snapshot identity is empty", pverrors.ErrUsage)
+	}
+	return hint.Identity, nil
+}
+
 // List returns the sorted snapshot IDs (hex) present in the repository.
 func List(ctx context.Context, repo repository.Repository) ([]string, error) {
 	if repo == nil {
@@ -441,6 +504,9 @@ func List(ctx context.Context, repo repository.Repository) ([]string, error) {
 	}
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
+		if strings.HasSuffix(k, ".ecc") {
+			continue
+		}
 		id, ok := strings.CutPrefix(k, SnapshotPrefix)
 		if !ok {
 			return nil, fmt.Errorf("list snapshots: unexpected key %q", k)

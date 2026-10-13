@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"petravault/internal/crypto"
+	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
 	"petravault/internal/manifest"
 	"petravault/internal/repository"
@@ -95,6 +96,84 @@ func TestCommitOpenRoundTrip(t *testing.T) {
 	if len(keys) != 1 || keys[0] != id {
 		t.Fatalf("list = %v, want [%s]", keys, id)
 	}
+}
+
+func TestCommitWritesSidecar(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := mustMLDSA(t)
+	repo, err := repository.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	dataKey := mustMaster(t)
+	defer dataKey.Zero()
+
+	id, err := manifest.Commit(ctx, repo, dataKey, testSigner{priv}, manifest.CommitParams{
+		RepositoryID: "repo-1",
+		SourceID:     "laptop-alice",
+		Identity:     "alice-fp",
+		CreatedAt:    time.Date(2026, time.October, 11, 10, 0, 0, 0, time.UTC),
+		Files:        sortedTestFiles(),
+		ECC:          "medium",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecarKey := manifest.SnapshotPrefix + id + ".ecc"
+	exists, err := repo.Exists(ctx, sidecarKey)
+	if err != nil || !exists {
+		t.Fatalf("snapshot sidecar missing: exists=%v err=%v", exists, err)
+	}
+	// Read the sealed object, damage it within budget, repair, re-verify.
+	r, err := repo.GetObject(ctx, manifest.SnapshotPrefix+id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	sr, err := repo.GetObject(ctx, sidecarKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar, err := io.ReadAll(sr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = sr.Close()
+	if err := manifest.VerifySnapshot(sealed, "repo-1", dataKey, id, pub); err != nil {
+		t.Fatalf("intact snapshot fails verify: %v", err)
+	}
+	damaged := bytes.Clone(sealed)
+	damaged[len(damaged)-1] ^= 0x01
+	if err := manifest.VerifySnapshot(damaged, "repo-1", dataKey, id, pub); err == nil {
+		t.Fatal("VerifySnapshot accepted damage, want failure")
+	}
+	fixed := mustRepairSnapshot(t, damaged, sidecar)
+	if err := manifest.VerifySnapshot(fixed, "repo-1", dataKey, id, pub); err != nil {
+		t.Fatalf("repaired snapshot fails verify: %v", err)
+	}
+	// Listing still reports only the snapshot, never its sidecar.
+	keys, err := manifest.List(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0] != id {
+		t.Fatalf("list = %v, want [%s]", keys, id)
+	}
+}
+
+func mustRepairSnapshot(t *testing.T, data, sidecar []byte) []byte {
+	t.Helper()
+	fixed, err := erasure.Repair(data, sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixed
 }
 
 func TestSnapshotIDIsHashOfPayload(t *testing.T) {
