@@ -39,6 +39,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	//nolint:contextcheck // cobra delivers ctx via ExecuteContext/cmd.Context(),
+	// not via constructors; RunE closures use cmd.Context() idiomatically.
 	root := newRootCmd(stdout, stderr)
 	root.SetArgs(args)
 	return root.ExecuteContext(ctx)
@@ -73,6 +75,8 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(newInitCmd(&f))
 	root.AddCommand(newInfoCmd(&f))
+	root.AddCommand(newIdentityCmd(&f))
+	root.AddCommand(newTrustCmd(&f))
 	root.AddCommand(newVersionCmd())
 	return root
 }
