@@ -6,12 +6,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"petravault/internal/crypto"
+	pverrors "petravault/internal/errors"
 	"petravault/internal/identity"
 	"petravault/internal/repository"
 )
@@ -392,5 +394,71 @@ func TestMembersPublishSyncOnboards(t *testing.T) {
 	out, _ = runCmd(t, "trust", "list")
 	if !strings.Contains(out, "bob") {
 		t.Fatalf("trust list after sync = %q, want bob", out)
+	}
+}
+
+func TestMembersSyncUntrustedHints(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+	charlieOut, _ := runCmd(t, "identity", "create", "--name", "charlie")
+	charlieFP := fingerprintFromCreate(t, charlieOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
+	// Bob (not Alice) grants Charlie, so the slot stage names Bob.
+	runCmd(t, "--identity", bobFP, "--repository", root, "trust", "add", charlieFP, "--grant-access")
+	runCmd(t, "--identity", aliceFP, "--repository", root, "members", "publish")
+
+	// New machine holding only Charlie's private key: wipe the trust store,
+	// keep the keystore, self-trust only.
+	pubFile := filepath.Join(t.TempDir(), "charlie.pub")
+	runCmd(t, "identity", "export", charlieFP, "--output", pubFile)
+	if err := os.RemoveAll(trustDir()); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, "identity", "import", pubFile, "--trust")
+
+	// Stage 1: repository config names no trusted key. The hint must name
+	// the discovery command while staying exit 4.
+	err := runCmdErr(t, "--identity", charlieFP, "--repository", root, "members", "sync")
+	if err == nil {
+		t.Fatal("members sync without any granter trusted succeeded, want hint error")
+	}
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("members sync error = %v, want ErrUntrustedSigner", err)
+	}
+	if pverrors.ExitCode(err) != pverrors.ExitIntegrity {
+		t.Fatalf("members sync exit = %d, want %d", pverrors.ExitCode(err), pverrors.ExitIntegrity)
+	}
+	if !strings.Contains(err.Error(), "trust sync") {
+		t.Fatalf("members sync error = %q, want trust-sync hint", err.Error())
+	}
+
+	// Stage 2: Alice trusted resolves the config, but Charlie's slot was
+	// granted by Bob. The hint must name Bob's fingerprint.
+	runCmd(t, "--repository", root, "trust", "sync", aliceFP)
+	err = runCmdErr(t, "--identity", charlieFP, "--repository", root, "members", "sync")
+	if err == nil {
+		t.Fatal("members sync trusting only Alice succeeded, want slot-granter hint")
+	}
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("members sync error = %v, want ErrUntrustedSigner", err)
+	}
+	if !strings.Contains(err.Error(), bobFP) {
+		t.Fatalf("members sync error = %q, want slot granter %s", err.Error(), bobFP)
+	}
+	if !strings.Contains(err.Error(), "trust sync") {
+		t.Fatalf("members sync error = %q, want trust-sync hint", err.Error())
+	}
+
+	// Stage 3: trusting Bob as well completes the onboarding.
+	runCmd(t, "--repository", root, "trust", "sync", bobFP)
+	out, _ := runCmd(t, "--identity", charlieFP, "--repository", root, "members", "sync")
+	if !strings.Contains(out, "adopted") {
+		t.Fatalf("members sync output = %q, want adoption", out)
 	}
 }

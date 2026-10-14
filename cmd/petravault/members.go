@@ -6,11 +6,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 
 	"petravault/internal/crypto"
+	pverrors "petravault/internal/errors"
 	"petravault/internal/identity"
 	"petravault/internal/repository"
 
@@ -28,21 +30,47 @@ func newMembersCmd(f *flags) *cobra.Command {
 	return cmd
 }
 
+// trustHint is the exact recovery command appended to ErrUntrustedSigner
+// failures in the roster flow. The fingerprint to approve is either named by
+// the wrapped error (slot granter, roster publisher) or discovered via the
+// list command (repository config, which names no key when nothing verifies).
+// Approval must stay out of band: the hint never suggests trusting a
+// fingerprint taken from the repository itself without an independent check,
+// so blind copy-paste (TOFU) is not taught. Fingerprints are public and safe
+// to name in errors; key material never appears here.
+func trustHint(repoPath string, named bool) string {
+	if named {
+		return "(verify that fingerprint out of band, then run `petravault trust sync <fingerprint> -r \"" + repoPath + "\"` with the named fingerprint and retry)"
+	}
+	return "(run `petravault trust sync -r \"" + repoPath + "\"` to list advisory copies, verify the repository creator's fingerprint out of band, then run `petravault trust sync <fingerprint> -r \"" + repoPath + "\"` to approve it)"
+}
+
+// withTrustHint appends trustHint to ErrUntrustedSigner failures and passes
+// anything else through untouched. Wrapping uses %w, so errors.Is and the
+// exit-code mapping (exit 4) are preserved.
+func withTrustHint(err error, repoPath string, named bool) error {
+	if err == nil || !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		return err
+	}
+	return fmt.Errorf("%w %s", err, trustHint(repoPath, named))
+}
+
 // openRosterData opens the signer's own slot and derives the data key the
 // roster is sealed under, alongside the verified repository config. Callers
-// zero both keys when finished.
-func openRosterData(ctx context.Context, repo repository.Repository, trust *identity.TrustStore, priv *identity.PrivateIdentity) (repository.Config, crypto.SecretKey, crypto.SecretKey, error) {
+// zero both keys when finished. repoPath only feeds the trust hints above;
+// it is never used as a trust decision.
+func openRosterData(ctx context.Context, repo repository.Repository, trust *identity.TrustStore, priv *identity.PrivateIdentity, repoPath string) (repository.Config, crypto.SecretKey, crypto.SecretKey, error) {
 	trusted, err := listTrustedSigners(trust)
 	if err != nil {
 		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
 	}
 	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
-		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
+		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, withTrustHint(err, repoPath, false)
 	}
 	master, err := openGranterSlot(ctx, repo, trust, repoCfg.RepositoryID, priv)
 	if err != nil {
-		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
+		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, withTrustHint(err, repoPath, true)
 	}
 	return repoCfg, master, master.DeriveSubkeys().Data, nil
 }
@@ -80,7 +108,7 @@ func newMembersPublishCmd(f *flags) *cobra.Command {
 				return err
 			}
 			trust := identity.NewTrustStore(trustDir())
-			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv)
+			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {
 				return err
 			}
@@ -135,7 +163,7 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 				return err
 			}
 			trust := identity.NewTrustStore(trustDir())
-			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv)
+			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {
 				return err
 			}
@@ -162,7 +190,7 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 				return id.SignPublic, nil
 			})
 			if err != nil {
-				return err
+				return withTrustHint(err, repoPath, true)
 			}
 			logger.InfoContext(ctx, "member roster adopted",
 				slog.String("publisher", summary.Publisher.Grouped()),
