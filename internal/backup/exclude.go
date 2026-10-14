@@ -8,6 +8,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	pverrors "petravault/internal/errors"
 )
 
 // Matcher reports whether a source-relative path is excluded (DESIGN.md
@@ -46,11 +48,22 @@ func NewMatcher(patterns []string) (Matcher, error) {
 }
 
 // LoadExcludeFile reads one glob per line, skipping blanks and lines
-// starting with '#'.
+// starting with '#'. Files larger than 1 MiB are refused, matching the
+// schedule job cap.
 func LoadExcludeFile(file string) ([]string, error) {
+	fi, err := os.Stat(file)
+	if err != nil {
+		return nil, fmt.Errorf("stat exclude file: %w", err)
+	}
+	if fi.Size() > 1<<20 {
+		return nil, fmt.Errorf("%w: exclude file %s too large", pverrors.ErrUsage, file)
+	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("read exclude file: %w", err)
+	}
+	if len(raw) > 1<<20 {
+		return nil, fmt.Errorf("%w: exclude file %s too large", pverrors.ErrUsage, file)
 	}
 	var out []string
 	for line := range strings.SplitSeq(string(raw), "\n") {
