@@ -5,11 +5,12 @@ package backup
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"path"
 	"strings"
 
 	pverrors "petravault/internal/errors"
+	"petravault/internal/nofollow"
 )
 
 // Matcher reports whether a source-relative path is excluded (DESIGN.md
@@ -51,14 +52,19 @@ func NewMatcher(patterns []string) (Matcher, error) {
 // starting with '#'. Files larger than 1 MiB are refused, matching the
 // schedule job cap.
 func LoadExcludeFile(file string) ([]string, error) {
-	fi, err := os.Stat(file)
+	f, err := nofollow.Open(file)
+	if err != nil {
+		return nil, fmt.Errorf("read exclude file: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat exclude file: %w", err)
 	}
 	if fi.Size() > 1<<20 {
 		return nil, fmt.Errorf("%w: exclude file %s too large", pverrors.ErrUsage, file)
 	}
-	raw, err := os.ReadFile(file)
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read exclude file: %w", err)
 	}

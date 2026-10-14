@@ -10,10 +10,13 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
 	"golang.org/x/term"
+
+	"petravault/internal/nofollow"
 )
 
 // maxPasswordFileSize bounds password-file reads.
@@ -77,7 +80,12 @@ func passwordFromCommand(ctx context.Context, cmdStr string) ([]byte, error) {
 }
 
 func passwordFromFile(path string) ([]byte, error) {
-	fi, err := os.Stat(path)
+	f, err := nofollow.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat password file: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat password file: %w", err)
 	}
@@ -87,7 +95,7 @@ func passwordFromFile(path string) ([]byte, error) {
 	if fi.Size() > maxPasswordFileSize {
 		return nil, fmt.Errorf("password file %s too large", path)
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(f, maxPasswordFileSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read password file: %w", err)
 	}

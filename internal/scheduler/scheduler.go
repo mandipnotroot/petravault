@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -29,6 +30,7 @@ import (
 
 	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
+	"petravault/internal/nofollow"
 )
 
 // Scheduling frequencies.
@@ -421,10 +423,15 @@ func LockPath(dir, name string) (string, error) {
 // LoadJob reads and validates one job file. Group/world-readable files and
 // unknown fields are refused (DESIGN.md §11.2, §12).
 func LoadJob(path string) (Job, error) {
-	if err := checkJobPermissions(path); err != nil {
+	f, err := nofollow.Open(path)
+	if err != nil {
+		return Job{}, fmt.Errorf("read schedule job: %w", err)
+	}
+	defer f.Close()
+	if err := checkJobPermissions(f, path); err != nil {
 		return Job{}, err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
 	if err != nil {
 		return Job{}, fmt.Errorf("read schedule job: %w", err)
 	}
@@ -491,18 +498,23 @@ func ListJobs(dir string) ([]Job, error) {
 // the caller initializes NextRun via EnsureState. Present files must be
 // mode 0600 like job files.
 func LoadState(path string) (State, error) {
-	if _, err := os.Stat(path); err != nil {
+	f, err := nofollow.Open(path)
+	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return State{}, nil
 		}
-		return State{}, fmt.Errorf("stat schedule state: %w", err)
+		return State{}, fmt.Errorf("read schedule state: %w", err)
 	}
-	if err := checkJobPermissions(path); err != nil {
+	defer f.Close()
+	if err := checkJobPermissions(f, path); err != nil {
 		return State{}, err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
 	if err != nil {
 		return State{}, fmt.Errorf("read schedule state: %w", err)
+	}
+	if len(raw) > 1<<20 {
+		return State{}, fmt.Errorf("%w: schedule state %s too large", pverrors.ErrUsage, path)
 	}
 	var wire stateFile
 	if err := json.Unmarshal(raw, &wire, json.RejectUnknownMembers(true)); err != nil {
@@ -821,9 +833,11 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 }
 
 // checkJobPermissions refuses schedule files readable by group or others.
-// Job and state files must be mode 0600 (DESIGN.md §11.2, §12).
-func checkJobPermissions(path string) error {
-	fi, err := os.Stat(path)
+// The open handle is statted, not the path, so a symlink swapped in after
+// the open cannot redirect the check. Job and state files must be mode
+// 0600 (DESIGN.md §11.2, §12).
+func checkJobPermissions(f *os.File, path string) error {
+	fi, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("stat schedule file: %w", err)
 	}

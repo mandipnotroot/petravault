@@ -562,7 +562,7 @@ petravault schedule add --name daily-documents --source ~/Documents \
 Scheduled jobs cannot prompt for a password. The keystore (§4.4) is unlocked using, in order of preference:
 
 1. `PETRAVAULT_PASSWORD_COMMAND`: a command that prints the password (works with `secret-tool`, `pass`, cloud secret managers, or a keyring).
-2. `PETRAVAULT_PASSWORD_FILE`: a file that must be mode `0600`, refused otherwise.
+2. `PETRAVAULT_PASSWORD_FILE`: a file that must be mode `0600`, refused otherwise, and is opened without following symlinks on Unix (`O_NOFOLLOW`).
 3. Interactive prompt (manual runs only).
 
 Passwords are never stored in `config.yaml` or job files and never passed as a command-line argument (visible in `ps`). Use a dedicated identity for scheduled machines so it can be revoked on its own. Example systemd unit for the daemon (more in `docs/unattended.md`):

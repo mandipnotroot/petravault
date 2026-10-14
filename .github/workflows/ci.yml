@@ -42,6 +42,23 @@ jobs:
       - run: make license
       - run: make reuse
 
+  # Windows ships as a release binary but the suite runs Ubuntu-only: this
+  # job proves the module, including build-tagged files, compiles and vets
+  # clean on Windows. Full test parity still needs triage of pre-existing
+  # platform gaps (symlinks, file modes) on a Windows machine.
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+
   # Inline lint annotations on PR diffs. Advisory only: fail_level none
   # means this job always exits 0, so skew between the pinned toolchain
   # and the action's linter can never block a merge; the check job above
