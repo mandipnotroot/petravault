@@ -110,15 +110,23 @@ func Load(o Options) (Config, error) {
 	cfg := Config{
 		DefaultRepository: cmp.Or(o.FlagRepository, envOr(lookup, "PETRAVAULT_REPOSITORY", ""), file.DefaultRepository),
 		LogLevel:          cmp.Or(o.FlagLogLevel, envOr(lookup, "PETRAVAULT_LOG_LEVEL", ""), file.LogLevel, DefaultLogLevel),
-		Concurrency:       cmp.Or(o.FlagConcurrency, envInt(lookup, "PETRAVAULT_CONCURRENCY"), file.Concurrency, DefaultConcurrency),
 		DefaultIdentity:   cmp.Or(o.FlagIdentity, envOr(lookup, "PETRAVAULT_IDENTITY", ""), file.DefaultIdentity),
 		ECC:               cmp.Or(envOr(lookup, "PETRAVAULT_ECC", ""), file.ECC, DefaultECC),
 		S3: S3{
 			Profile: cmp.Or(envOr(lookup, "PETRAVAULT_S3_PROFILE", ""), file.S3.Profile),
 			Region:  cmp.Or(envOr(lookup, "PETRAVAULT_S3_REGION", ""), file.S3.Region),
 		},
-		VerifyAfterBackup: orBool(envBool(lookup, "PETRAVAULT_VERIFY_AFTER_BACKUP"), file.VerifyAfterBackup, new(true)),
 	}
+	envConcurrency, err := envInt(lookup, "PETRAVAULT_CONCURRENCY")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Concurrency = cmp.Or(o.FlagConcurrency, envConcurrency, file.Concurrency, DefaultConcurrency)
+	envVerify, err := envBool(lookup, "PETRAVAULT_VERIFY_AFTER_BACKUP")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.VerifyAfterBackup = orBool(envVerify, file.VerifyAfterBackup, new(true))
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -243,33 +251,33 @@ func lookupValue(lookup func(string) (string, bool), key string) string {
 	return ""
 }
 
-func envInt(lookup func(string) (string, bool), key string) int {
+func envInt(lookup func(string) (string, bool), key string) (int, error) {
 	v, ok := lookup(key)
 	if !ok || v == "" {
-		return 0
+		return 0, nil
 	}
 	n := 0
 	for i := range len(v) {
 		if v[i] < '0' || v[i] > '9' {
-			return 0
+			return 0, fmt.Errorf("invalid %s %q: want a positive number", key, v)
 		}
 		n = n*10 + int(v[i]-'0')
 	}
-	return n
+	return n, nil
 }
 
-func envBool(lookup func(string) (string, bool), key string) *bool {
+func envBool(lookup func(string) (string, bool), key string) (*bool, error) {
 	v, ok := lookup(key)
 	if !ok || v == "" {
-		return nil
+		return nil, nil
 	}
 	switch strings.ToLower(v) {
 	case "1", "true", "yes":
-		return new(true)
+		return new(true), nil
 	case "0", "false", "no":
-		return new(false)
+		return new(false), nil
 	default:
-		return nil
+		return nil, fmt.Errorf("invalid %s %q: want one of 1, true, yes, 0, false, no", key, v)
 	}
 }
 
