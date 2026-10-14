@@ -595,24 +595,25 @@ func groupBySource(manifests map[string]manifest.Manifest) map[string]map[string
 }
 
 // checkChains validates per-source parent links and returns each source's
-// tip. Two children of one parent, two roots for one source, a parent from
-// another source, or a missing parent all wrap ErrIntegrity.
+// tip. Pruned history is tolerated: a missing parent makes its child a new
+// root, and multiple roots are allowed (each gap starts a new segment).
+// Forks (two retained children of one parent), a parent from another
+// source, cycles, and multiple tips still wrap ErrIntegrity.
 func checkChains(manifests map[string]manifest.Manifest) (map[string]string, error) {
 	bySource := groupBySource(manifests)
 	tips := map[string]string{}
 	var errs []error
 	for source, ids := range bySource {
 		children := map[string][]string{}
-		roots := []string{}
 		for id, m := range ids {
 			if m.Parent == "" {
-				roots = append(roots, id)
 				continue
 			}
 			parent := strings.ToLower(strings.TrimSpace(m.Parent))
 			parentManifest, ok := manifests[parent]
 			if !ok {
-				errs = append(errs, fmt.Errorf("%w: snapshot %s parent %s is missing", pverrors.ErrIntegrity, id, parent))
+				// Pruned history: the parent is gone and this snapshot
+				// is a new root (see prune package docs).
 				continue
 			}
 			if parentManifest.SourceID != source {
@@ -620,11 +621,6 @@ func checkChains(manifests map[string]manifest.Manifest) (map[string]string, err
 				continue
 			}
 			children[parent] = append(children[parent], id)
-		}
-		if len(roots) > 1 {
-			slices.Sort(roots)
-			errs = append(errs, fmt.Errorf("%w: source %q has %d roots: chain is forked", pverrors.ErrIntegrity, source, len(roots)))
-			continue
 		}
 		for parent, kids := range children {
 			if len(kids) > 1 {
@@ -649,7 +645,7 @@ func checkChains(manifests map[string]manifest.Manifest) (map[string]string, err
 			errs = append(errs, fmt.Errorf("%w: source %q has %d tips, want 1", pverrors.ErrIntegrity, source, len(tipCandidates)))
 			continue
 		}
-		// Walk to the root to detect cycles and disconnected entries.
+		// Walk to the root, stopping at pruned gaps, to detect cycles.
 		seen := map[string]bool{}
 		cur := tipCandidates[0]
 		for cur != "" {
@@ -662,16 +658,11 @@ func checkChains(manifests map[string]manifest.Manifest) (map[string]string, err
 			if m.Parent == "" {
 				break
 			}
-			cur = strings.ToLower(strings.TrimSpace(m.Parent))
-			if _, ok := ids[cur]; !ok {
-				break // Missing parent already reported.
+			parent := strings.ToLower(strings.TrimSpace(m.Parent))
+			if _, ok := ids[parent]; !ok {
+				break // Pruned gap: new root.
 			}
-		}
-		if len(seen) != len(ids) && len(errs) == 0 {
-			// Disconnected without a second root/tip usually means a
-			// cycle consumed the walk; report it plainly.
-			errs = append(errs, fmt.Errorf("%w: source %q chain is disconnected", pverrors.ErrIntegrity, source))
-			continue
+			cur = parent
 		}
 		tips[source] = tipCandidates[0]
 	}
