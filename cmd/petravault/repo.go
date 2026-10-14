@@ -219,20 +219,17 @@ func parentForSource(ctx context.Context, repo repository.Repository, repoID, so
 		byID[c.id] = c
 	}
 	children := make(map[string][]string)
-	var roots []string
 	for _, c := range owned {
 		if c.m.Parent == "" {
-			roots = append(roots, c.id)
 			continue
 		}
 		parent := strings.ToLower(strings.TrimSpace(c.m.Parent))
 		if _, ok := byID[parent]; !ok {
-			return "", nil, time.Time{}, fmt.Errorf("%w: parent %s of %s is missing", pverrors.ErrIntegrity, parent, c.id)
+			// Pruned history: the parent is gone and this snapshot is a
+			// new root. Not an error (see prune package docs).
+			continue
 		}
 		children[parent] = append(children[parent], c.id)
-	}
-	if len(roots) > 1 {
-		return "", nil, time.Time{}, fmt.Errorf("%w: source %q has %d roots: chain is forked", pverrors.ErrIntegrity, sourceID, len(roots))
 	}
 	for parent, kids := range children {
 		if len(kids) > 1 {

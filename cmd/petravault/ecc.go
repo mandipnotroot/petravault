@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"petravault/internal/crypto"
 	"petravault/internal/erasure"
@@ -138,6 +139,24 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			defer master.Zero()
 			sub := master.DeriveSubkeys()
 			defer sub.Zero()
+			// ecc rebuild takes gc.lock so it cannot overlap a prune, but
+			// it does not wait for backup markers: backups keep running
+			// while it holds the lock (DESIGN.md §10.2).
+			holder := "ecc-rebuild-" + repository.DefaultHost()
+			acquired, err := repository.TryAcquireGCLock(cmd.Context(), repo, repository.OperationECCRebuild, holder, repository.DefaultHost(), repository.DefaultLockTTL, time.Now)
+			if err != nil {
+				return err
+			}
+			if !acquired {
+				return fmt.Errorf("%w: maintenance lock is held, refusing to rebuild", pverrors.ErrUsage)
+			}
+			stop := repository.StartHeartbeat(cmd.Context(), repo, repository.GCLockKey, repository.OperationECCRebuild, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
+			defer stop()
+			defer func() {
+				if err := repository.ReleaseGCLock(cmd.Context(), repo); err != nil {
+					logger.WarnContext(cmd.Context(), "release maintenance lock failed", slog.Any("error", err))
+				}
+			}()
 			verify := rebuildVerifier(repoCfg.RepositoryID, sub.Data, trust, trusted)
 			if err := repository.Rebuild(cmd.Context(), repo, repoCfg.ECC, verify); err != nil {
 				return err

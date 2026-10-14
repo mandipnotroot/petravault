@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"petravault/internal/backup"
 	"petravault/internal/config"
@@ -65,6 +66,25 @@ func newBackupCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Lock ordering: write backup-<id>, then check for gc.lock,
+			// then read indexes. If prune holds the lock, remove the
+			// marker and retry with backoff (DESIGN.md §10.2).
+			backupID, err := repository.NewBackupID()
+			if err != nil {
+				return err
+			}
+			holder := "backup-" + sid + "-" + backupID[:8]
+			host := repository.DefaultHost()
+			if err := waitForMaintenance(cmd.Context(), repo, backupID, holder, host, logger); err != nil {
+				return err
+			}
+			stopHeartbeat := repository.StartHeartbeat(cmd.Context(), repo, repository.BackupLockPrefix+backupID, repository.OperationBackup, holder, host, repository.DefaultHeartbeatInterval, time.Now, logger)
+			defer stopHeartbeat()
+			defer func() {
+				if err := repository.RemoveBackupMarker(context.WithoutCancel(cmd.Context()), repo, backupID); err != nil {
+					logger.WarnContext(cmd.Context(), "remove backup marker failed", slog.Any("error", err))
+				}
+			}()
 			parentID, parentFiles, parentStart, err := parentForSource(cmd.Context(), repo, repoCfg.RepositoryID, sid, sub.Data, trust, trusted)
 			if err != nil {
 				return err
@@ -159,6 +179,44 @@ func shouldVerifyAfterBackup(cfg config.Config, wantVerify, wantNoVerify bool) b
 		return true
 	}
 	return *cfg.VerifyAfterBackup
+}
+
+// waitForMaintenance writes the backup marker, checks for gc.lock, and
+// retries with exponential backoff when prune holds the lock. The marker
+// is removed before each retry so prune never waits on a backup that is
+// itself waiting (DESIGN.md §10.2).
+func waitForMaintenance(ctx context.Context, repo repository.Repository, backupID, holder, host string, logger *slog.Logger) error {
+	backoff := 200 * time.Millisecond
+	for attempt := range repository.DefaultBackupRetryAttempts {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := repository.WriteBackupMarker(ctx, repo, backupID, holder, host, time.Now); err != nil {
+			return err
+		}
+		held, err := repository.GCLockHeld(ctx, repo, repository.DefaultLockTTL, time.Now)
+		if err != nil {
+			_ = repository.RemoveBackupMarker(ctx, repo, backupID)
+			return err
+		}
+		if !held {
+			return nil
+		}
+		_ = repository.RemoveBackupMarker(ctx, repo, backupID)
+		if attempt+1 >= repository.DefaultBackupRetryAttempts {
+			break
+		}
+		logger.InfoContext(ctx, "maintenance lock held, retrying backup",
+			slog.Int("attempt", attempt+1),
+			slog.Duration("backoff", backoff))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return fmt.Errorf("%w: maintenance lock is held, backup aborted", pverrors.ErrUsage)
 }
 
 // verifyOne runs a standard or deep verification of one snapshot. It is
