@@ -714,7 +714,10 @@ func TestAttackKeyedIDsHidePlaintext(t *testing.T) {
 	t.Parallel()
 
 	fx := newFixture(t)
-	plaintext := "known file for confirmation attack " + strings.Repeat("x", 40)
+	// The file stays below the test chunker MinSize (64), so keyed FastCDC
+	// cannot cut it regardless of the per-repository key: it is always a
+	// single chunk and recorded[0] is its keyed hash deterministically.
+	plaintext := "known file for confirmation " + strings.Repeat("x", 20)
 	src := t.TempDir()
 	writeSourceFile(t, src, "known.txt", plaintext)
 	_, entries := commitBackup(t, fx, src, "laptop", nil, time.Time{}, "")
@@ -724,8 +727,8 @@ func TestAttackKeyedIDsHidePlaintext(t *testing.T) {
 	var recorded string
 	for _, e := range entries {
 		if e.Path == "known.txt" {
-			if len(e.Chunks) == 0 {
-				t.Fatal("known file recorded no chunks")
+			if len(e.Chunks) != 1 {
+				t.Fatalf("known file recorded %d chunks, want exactly 1", len(e.Chunks))
 			}
 			recorded = e.Chunks[0]
 		}
