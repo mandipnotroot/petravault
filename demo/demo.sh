@@ -1,7 +1,6 @@
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Petravault Contributors
 # SPDX-License-Identifier: GPL-3.0-only
-
-#!/usr/bin/env bash
 #
 # Petravault end-to-end demo (DESIGN.md §15 phase 13, §17 Definition of Done).
 #
