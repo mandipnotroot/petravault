@@ -59,8 +59,11 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoCfg, _, err := repository.ReadConfig(cmd.Context(), repo, trusted)
+			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
 			if err != nil {
+				return err
+			}
+			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)
@@ -115,8 +118,11 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoCfg, _, err := repository.ReadConfig(cmd.Context(), repo, trusted)
+			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
 			if err != nil {
+				return err
+			}
+			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)

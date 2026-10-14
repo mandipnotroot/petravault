@@ -503,7 +503,7 @@ func scheduleRunner(f *flags, cfg config.Config, logger *slog.Logger) scheduler.
 		if strings.TrimSpace(repoPath) == "" {
 			return "", fmt.Errorf("%w: job %q has no repository", pverrors.ErrUsage, job.Name)
 		}
-		repo, repoCfg, trust, trusted, err := openVerifiedRepo(ctx, cfg, repoPath, logger)
+		repo, repoCfg, trust, trusted, err := openVerifiedRepo(ctx, cfg, repoPath)
 		if err != nil {
 			return "", err
 		}

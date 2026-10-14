@@ -169,8 +169,11 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 	if err != nil {
 		return err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, configSigner, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
+		return err
+	}
+	if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 		return err
 	}
 	granter, err := resolveSigner(f, cfg)
@@ -247,7 +250,9 @@ func openGranterSlot(ctx context.Context, repo repository.Repository, trust *ide
 
 // listTrustedSigners builds the fingerprint-to-signing-key map for
 // repository config verification from the client-local trust list. Revoked
-// entries are included here so historical configs stay openable; the granter
+// entries are included so every signature attributes to its signer first;
+// callers then refuse revoked or removed signers (requireTrustedConfigSigner)
+// while snapshot history keeps its own revocation-aware checks. The granter
 // itself must still be currently trusted (IsTrusted) to grant read access.
 func listTrustedSigners(trust *identity.TrustStore) (map[string][]byte, error) {
 	listed, err := trust.List()

@@ -238,12 +238,16 @@ func newInfoCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			trusted, err := listTrustedSigners(identity.NewTrustStore(trustDir()))
+			trust := identity.NewTrustStore(trustDir())
+			trusted, err := listTrustedSigners(trust)
 			if err != nil {
 				return err
 			}
 			repoCfg, signer, err := repository.ReadConfig(cmd.Context(), repo, trusted)
 			if err != nil {
+				return err
+			}
+			if err := requireTrustedConfigSigner(trust, signer); err != nil {
 				return err
 			}
 			params, err := erasure.Resolve(repoCfg.ECC)

@@ -64,9 +64,12 @@ func openRosterData(ctx context.Context, repo repository.Repository, trust *iden
 	if err != nil {
 		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, configSigner, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
 		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, withTrustHint(err, repoPath, false)
+	}
+	if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
+		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
 	}
 	master, err := openGranterSlot(ctx, repo, trust, repoCfg.RepositoryID, priv)
 	if err != nil {

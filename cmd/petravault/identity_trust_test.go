@@ -160,6 +160,24 @@ func TestTrustRevokeByOtherSigner(t *testing.T) {
 	}
 }
 
+func TestConfigSignerRevokedRefusesOpen(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+	// Control: the config opens while its signer is trusted.
+	runCmd(t, "-r", repo, "info")
+	runCmd(t, "trust", "revoke", fp, "--reason", "key rotation test")
+	err := runCmdErr(t, "-r", repo, "info")
+	if err == nil {
+		t.Fatal("info opened a config signed by a revoked key, want refusal")
+	}
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("revoked config error = %v, want an untrusted-signer failure", err)
+	}
+}
+
 func TestTrustRevokeRequiresReason(t *testing.T) {
 	isolatedIdentityEnv(t, "test-password")
 	out, _ := runCmd(t, "identity", "create", "--name", "alice")
