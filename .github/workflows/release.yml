@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: 2026 Petravault Contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Tag-based releases (DESIGN.md §13, GO_GUIDELINES.md §18).
+#
+# Pushing a `v*` tag builds reproducible-aim binaries (CGO_ENABLED=0,
+# -trimpath, pinned toolchain from go.mod, version from the tag), a
+# SHA256SUMS checksum file, and a CycloneDX SBOM, then opens a *draft*
+# GitHub release with those assets. A maintainer attaches a detached GPG
+# signature over SHA256SUMS (or the sign step below does it when a
+# GPG_PRIVATE_KEY secret is configured) before publishing.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - name: Build release binaries
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64"; do
+            set -- $target
+            name="petravault-${GITHUB_REF_NAME}-$1-$2"
+            [ "$1" = "windows" ] && name="$name.exe"
+            GOOS="$1" GOARCH="$2" go build -trimpath \
+              -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/$name" ./cmd/petravault
+          done
+          ls -la dist
+      - name: Checksums and SBOM
+        run: |
+          (cd dist && sha256sum ./* > SHA256SUMS)
+          cat dist/SHA256SUMS
+          make sbom
+          mv bom.json dist/petravault-"${GITHUB_REF_NAME}".bom.json
+      - name: Detached signature over checksums (maintainer key)
+        # Skipped unless the repository configures a GPG_PRIVATE_KEY secret;
+        # otherwise a maintainer signs dist/SHA256SUMS offline and attaches
+        # SHA256SUMS.asc to the draft release before publishing.
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --armor --detach-sign -o dist/SHA256SUMS.asc dist/SHA256SUMS
+      - name: Open draft release with artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --draft \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Petravault ${GITHUB_REF_NAME}. Verify with: (cd dist && sha256sum -c SHA256SUMS). SBOM: *.bom.json (CycloneDX)." \
+            dist/*

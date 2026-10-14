@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Petravault Contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-.PHONY: fmt vet lint test test-integration fuzz cover vuln license reuse tidy fix build demo check
+.PHONY: fmt vet lint test test-integration fuzz cover vuln license sbom reuse tidy fix build demo check
 
 TESTFLAGS := -race -shuffle=on -count=1
 
@@ -44,6 +44,13 @@ license:
 
 reuse:
 	reuse lint
+
+# CycloneDX SBOM of the module (DESIGN.md §13, GO_GUIDELINES.md §18).
+# Release-time only: uses `go run ...@latest` like the license target, so no
+# new module dependency. cyclonedx-gomod is Apache-2.0 (GPL-3.0-compatible)
+# and actively maintained; the `mod` subcommand covers the whole module.
+sbom:
+	go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest mod -licenses -json -output bom.json .
 
 tidy:
 	go mod tidy

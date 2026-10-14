@@ -3,6 +3,8 @@
 
 # Build output
 bin/
+dist/
+bom.json
 
 # Test and coverage artifacts
 coverage.out
