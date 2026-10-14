@@ -265,6 +265,46 @@ func (s *Store) LoadPrivate(fp Fingerprint, password []byte) (*PrivateIdentity, 
 	return &PrivateIdentity{Public: *pub, signPriv: signPriv, kemPriv: kemPriv}, nil
 }
 
+// ImportPrivate stores a password-sealed private file for fp, then proves
+// it opens with password and matches the stored public half. It returns the
+// unlocked identity, so bundle import confirms the password works. A
+// mismatch removes the written file and fails closed.
+func (s *Store) ImportPrivate(fp Fingerprint, sealed, password []byte) (*PrivateIdentity, error) {
+	if len(sealed) == 0 {
+		return nil, errors.New("import private key: empty sealed file")
+	}
+	if len(password) == 0 {
+		return nil, errors.New("password must not be empty")
+	}
+	dir := filepath.Join(s.dir, fp.String())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create identity dir: %w", err)
+	}
+	path := filepath.Join(dir, privateFileName)
+	if err := writeDurableFile(path, sealed, 0o600); err != nil {
+		return nil, err
+	}
+	priv, err := s.LoadPrivate(fp, password)
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("import private key: %w", err)
+	}
+	return priv, nil
+}
+
+// SealedPrivate returns the raw password-sealed private file for fp, for
+// recovery-bundle export. The bytes stay sealed; export never sees keys.
+func (s *Store) SealedPrivate(fp Fingerprint) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(s.dir, fp.String(), privateFileName))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: identity %s has no private key here", pverrors.ErrUsage, fp.Grouped())
+		}
+		return nil, fmt.Errorf("read private key: %w", err)
+	}
+	return data, nil
+}
+
 // Export writes fp's public file to w.
 func (s *Store) Export(fp Fingerprint, w io.Writer) error {
 	id, err := s.LoadPublic(fp)

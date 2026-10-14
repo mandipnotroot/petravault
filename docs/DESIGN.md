@@ -283,6 +283,8 @@ Revocation records (`fingerprint`, `reason`, `created_at`, `signature`) are sign
 
 Trust-list backup (`trust publish` / `trust recover`). Each client may publish its own trust view — trusted identities plus revocation envelopes — HPKE-sealed to its own KEM key and signed, at `trust-lists/<own-fingerprint>.json`, and rebuild a lost local store from it. Only the owner opens it, so the trust graph stays hidden from storage observers and ex-members, and recovery needs no prior trust. A hostile repository can withhold or roll the record back but can neither read nor alter it. Recovery restores past human decisions, never makes new ones: the out-of-band fingerprint checks from when each member was added are preserved, not repeated. A stale record misses recent additions (safe direction: unknown signers fail closed) and recent revocations (unsafe direction), so `recover` prints the export time, re-publish is due after every trust change, and revocations are re-confirmed with the team. Heads still re-learn on the next verify (§9).
 
+Offline recovery bundle (`recovery export` / `import` / `status`). One password-encrypted file holding the identity (public file plus the still-sealed private file), the trust view, and head records — everything client-side that decryption needs. Export copies sealed bytes and never unlocks keys; import proves both passwords by unlocking the bundle and then the restored private key (the double confirm), and replaces head files as the explicit operator reset. `status` compares bundled tips with live ones so a stale copy is noticed. Store the bundle off-machine with the password in your manager; it never belongs in the repository.
+
 Shared member roster (`members publish` / `members sync`). The granter additionally publishes the non-revoked membership sealed under the repository data key at the single key `members.json`, signed by the publisher. Any member opens it with the master they hold, checks the publisher against their own trust list, and adopts the entries — onboarding a new machine costs one human check (the granter) instead of one per member. The roster proposes trust, never access: slots still gate every byte. It does not exclude members revoked after export (re-publish on every trust change) and does not hide membership from ex-members (they hold the master, §4.6). Adopting is explicit per run, never silent.
 
 ### 5.3 Explicit limitations
@@ -701,6 +703,7 @@ petravault ecc {set <level>|rebuild}
 petravault identity {create|list|export|import [--trust]}
 petravault trust {list|add [--grant-access]|remove|revoke|publish|recover|sync [fingerprint...]}
 petravault members {publish|sync}
+petravault recovery {export|import|status}
 
 petravault backup <source> [--exclude GLOB] [--exclude-file F] [--exclude-caches]
                   [--one-file-system] [--force-rescan] [--verify|--no-verify] [--source-id ID] [--ecc LEVEL]

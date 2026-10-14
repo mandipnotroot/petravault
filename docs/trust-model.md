@@ -94,6 +94,13 @@ granter runs `members sync` and adopts the rest in one explicit step —
 no per-member checks to repeat. The roster never grants access by itself;
 slots do. Re-publish it on every membership change.
 
+## Offline bundle
+
+`recovery export --output /mnt/usb/alice.recovery` writes one encrypted
+file: your identity, trust view, and heads. `recovery import` restores all
+three and proves both passwords by unlocking. `recovery status` shows
+whether the copy is behind. One file, same password, USB drawer.
+
 ## Key slots and config
 
 Each `keys/<fingerprint>.slot` is an HPKE-sealed master key inside a
