@@ -323,12 +323,12 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 					}
 					plaintext, err := pack.ReadChunk(ctx, repo, repoCfg.RepositoryID, dataKey, chunkIDKey, loc, maxChunk)
 					if err != nil {
-						errs = append(errs, fmt.Errorf("snapshot %s file %q: %w: %w", hexID, f.Path, err, pverrors.ErrIntegrity))
+						errs = append(errs, fmt.Errorf("snapshot %s file %q: %w", hexID, f.Path, err))
 						break
 					}
 					total += int64(len(plaintext))
 				}
-				if total != f.Size && total != 0 {
+				if total != f.Size {
 					// Size mismatch is metadata corruption, not just
 					// chunk damage: it fails deep verification.
 					found := false
@@ -338,7 +338,7 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 							break
 						}
 					}
-					if !found && total != 0 {
+					if !found {
 						// Only report when chunks were readable but the
 						// size disagrees; unreadable chunks are already
 						// reported.
@@ -547,23 +547,26 @@ func checkSidecar(ctx context.Context, repo repository.Repository, objectKey str
 	_ = deep
 	exists, err := repo.Exists(ctx, erasure.SidecarKey(objectKey))
 	if err != nil {
-		return ""
+		return "sidecar check failed for " + objectKey + ": " + err.Error()
 	}
 	if !exists {
 		return "missing sidecar for " + objectKey
 	}
 	r, err := repo.GetObject(ctx, erasure.SidecarKey(objectKey))
 	if err != nil {
-		return ""
+		return "unreadable sidecar for " + objectKey + ": " + err.Error()
 	}
 	defer r.Close()
-	raw, err := io.ReadAll(r)
+	// Sidecars hold parity shards proportional to the object; cap the read
+	// so a hostile repository cannot OOM the verifier (deep parity checks
+	// re-read and fully validate below).
+	raw, err := io.ReadAll(io.LimitReader(r, 1<<28))
 	if err != nil {
-		return ""
+		return "unreadable sidecar for " + objectKey + ": " + err.Error()
 	}
 	sc, err := erasure.Decode(raw)
 	if err != nil {
-		return ""
+		return "corrupt sidecar for " + objectKey + ": " + err.Error()
 	}
 	if sc.DataLength != len(objectBytes) {
 		return "sidecar length mismatch for " + objectKey
