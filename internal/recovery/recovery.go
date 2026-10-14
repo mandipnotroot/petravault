@@ -218,10 +218,32 @@ func Import(store *identity.Store, trust *identity.TrustStore, headsDir string, 
 			return nil, fmt.Errorf("import recovery: %w", err)
 		}
 	}
+	restored := make(map[string][]byte, len(wire.Trusted))
+	listed, err := trust.List()
+	if err != nil {
+		return nil, fmt.Errorf("import recovery: %w", err)
+	}
+	for _, id := range listed {
+		restored[id.Fingerprint.String()] = id.SignPublic
+	}
 	for _, entry := range wire.Revoked {
 		fp, err := parseRevokedName(entry.Name)
 		if err != nil {
 			return nil, err
+		}
+		rev, err := identity.DecodeRevocation(entry.Data)
+		if err != nil {
+			return nil, fmt.Errorf("import recovery: %w", err)
+		}
+		if !rev.Fingerprint.Equal(fp) {
+			return nil, fmt.Errorf("%w: bundle revocation entry mismatch", pverrors.ErrIntegrity)
+		}
+		signerPub, ok := restored[rev.Signer.String()]
+		if !ok {
+			return nil, fmt.Errorf("%w: bundle revocation signed by unknown %s", pverrors.ErrUntrustedSigner, rev.Signer.Grouped())
+		}
+		if _, err := identity.VerifyRevocation(entry.Data, signerPub); err != nil {
+			return nil, fmt.Errorf("import recovery: %w", err)
 		}
 		if err := trust.AddRevocation(fp, entry.Data); err != nil {
 			return nil, fmt.Errorf("import recovery: %w", err)
