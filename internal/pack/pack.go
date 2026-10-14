@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 
@@ -241,6 +242,34 @@ func ListPack(ctx context.Context, repo repository.Repository, repoID string, da
 		return nil, err
 	}
 	return parsePack(content, repoID, dataKey, packKey)
+}
+
+// ListPackEntries verifies a pack header and returns index entries with
+// absolute blob offsets, so prune can rebuild indexes for kept packs
+// without trusting stored index offsets. Structural damage is reported;
+// authentication failures wrap ErrIntegrity.
+func ListPackEntries(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, packKey string) ([]Entry, error) {
+	content, err := readAll(ctx, repo, packKey, -1, -1)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := parsePack(content, repoID, dataKey, packKey)
+	if err != nil {
+		return nil, err
+	}
+	headerLen := binary.BigEndian.Uint64(content[:8])
+	// parsePack already bounded headerLen by len(content), which fits int;
+	// re-check before narrowing to int64 for gosec G115.
+	if headerLen > uint64(len(content)) || headerLen > math.MaxInt64-8 {
+		return nil, fmt.Errorf("pack %s size %d disagrees with its header", packKey, len(content))
+	}
+	offset := int64(8) + int64(headerLen)
+	out := make([]Entry, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, Entry{ID: ref.ID, Pack: packKey, Offset: offset, Length: ref.Length})
+		offset += ref.Length
+	}
+	return out, nil
 }
 
 // VerifyPack authenticates every byte of one pack held in memory: the header

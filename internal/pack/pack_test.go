@@ -516,3 +516,43 @@ func TestWriteIndexWritesSidecar(t *testing.T) {
 		t.Fatalf("verify error = %v, want integrity failure", err)
 	}
 }
+
+func TestListPackEntriesMatchWriter(t *testing.T) {
+	t.Parallel()
+
+	keys := mustSubkeys(t)
+	repo := mustRepo(t)
+	ctx := t.Context()
+
+	plaintexts := [][]byte{[]byte("alpha"), []byte("beta"), bytes.Repeat([]byte("c"), 1000)}
+	w := pack.NewWriter(testRepoID, keys.data, 1<<20)
+	for _, p := range plaintexts {
+		if err := w.Add(chunkID(t, keys.chunkID, p), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	packKey, err := w.Flush(ctx, repo, "off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := w.Entries()
+	got, err := pack.ListPackEntries(ctx, repo, testRepoID, keys.data, packKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("entries = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID || got[i].Pack != packKey || got[i].Offset != want[i].Offset || got[i].Length != want[i].Length {
+			t.Fatalf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+		plaintext, err := pack.ReadChunk(ctx, repo, testRepoID, keys.data, keys.chunkID, got[i], compression.DefaultMaxSize)
+		if err != nil {
+			t.Fatalf("ReadChunk via listed entry failed: %v", err)
+		}
+		if !bytes.Equal(plaintext, plaintexts[i]) {
+			t.Fatalf("entry %d plaintext mismatch", i)
+		}
+	}
+}
