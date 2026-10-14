@@ -53,6 +53,16 @@ petravault restore <snapshot-id> /tmp/pv-restore -r /tmp/pv-repo
 petravault prune --keep-daily 30 --keep-weekly 12 --keep-monthly 12 -r /tmp/pv-repo
 ```
 
+No configuration file is needed: every setting has a built-in default
+(ECC `medium`, log level `info`, concurrency 4), and passwords are asked
+for interactively. Optional tuning lives in
+`~/.config/petravault/config.yaml` — default repository, log level,
+identity, ECC profile, S3 profile/region — resolved as CLI flags, then
+`PETRAVAULT_*` environment variables, then the file, then defaults (see
+`docs/unattended.md` for every key). Unattended runs unlock without a
+prompt via `PETRAVAULT_PASSWORD_COMMAND` or a mode-`0600`
+`PETRAVAULT_PASSWORD_FILE`; passwords never live in the config file.
+
 S3 repositories are addressed as `s3:<bucket>[/<prefix>]` (see
 `docs/storage.md`); scheduled runs are covered in `docs/unattended.md`.
 Exit codes: `0` ok, `1` error, `2` usage, `3` warnings, `4`
