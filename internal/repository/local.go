@@ -69,32 +69,55 @@ func (l *Local) PutObject(_ context.Context, key string, r io.Reader) error {
 }
 
 // PutObjectIfAbsent implements Repository. O_EXCL creation is the
-// compare-and-swap: an existing key returns (false, nil).
+// compare-and-swap: an existing key returns (false, nil). The write is
+// durable and atomic: bytes go to a temp file in the same directory and
+// are installed with a hard link, so concurrent readers never observe a
+// torn object and a failed write never leaves a partial file behind that
+// would poison future CAS attempts (DESIGN.md §8, GO_GUIDELINES.md §11).
 func (l *Local) PutObjectIfAbsent(_ context.Context, key string, r io.Reader) (bool, error) {
 	path, err := l.resolve(key)
 	if err != nil {
 		return false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("create parent: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		return false, nil
-	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return false, fmt.Errorf("create %s: %w", key, err)
+		return false, fmt.Errorf("create temp for %s: %w", key, err)
 	}
-	if _, err := io.Copy(f, r); err != nil {
-		_ = f.Close()
-		return false, fmt.Errorf("write %s: %w", key, err)
+	tmpName := tmp.Name()
+	// On any failure before install, remove the temp file. After a
+	// successful link the temp path is unlinked separately.
+	writeErr := func() error {
+		if _, err := io.Copy(tmp, r); err != nil {
+			return fmt.Errorf("write %s: %w", key, err)
+		}
+		if err := tmp.Sync(); err != nil {
+			return fmt.Errorf("sync %s: %w", key, err)
+		}
+		if err := tmp.Close(); err != nil {
+			return fmt.Errorf("close %s: %w", key, err)
+		}
+		return nil
+	}()
+	if writeErr != nil {
+		_ = os.Remove(tmpName)
+		return false, writeErr
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return false, fmt.Errorf("sync %s: %w", key, err)
+	// Link installs the temp content at the target atomically and fails
+	// when the target already exists, which is the compare-and-swap.
+	if err := os.Link(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("install %s: %w", key, err)
 	}
-	if err := f.Close(); err != nil {
-		return false, fmt.Errorf("close %s: %w", key, err)
+	_ = os.Remove(tmpName)
+	if err := syncDir(dir); err != nil {
+		return false, fmt.Errorf("sync dir for %s: %w", key, err)
 	}
 	return true, nil
 }
@@ -176,6 +199,11 @@ func (l *Local) List(_ context.Context, prefix string) ([]string, error) {
 			return err
 		}
 		name := filepath.ToSlash(rel)
+		// Crash leftovers from durable writes (<name>.tmp-*) live in the
+		// same directory; they are never repository objects.
+		if strings.Contains(name, ".tmp-") {
+			return nil
+		}
 		if strings.HasPrefix(name, prefix) {
 			out = append(out, name)
 		}
