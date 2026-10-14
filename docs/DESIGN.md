@@ -188,7 +188,7 @@ Password → Argon2id → Key Encryption Key → decrypts identity private keys 
 
 **Private keys live on the client, never in the repository**, so a stolen repository offers no offline password-guessing target. The repository holds only public key material and sealed key slots. Opening a slot requires the private KEM key from the client keystore (`$XDG_DATA_HOME/petravault/identities/<fingerprint>/`).
 
-Argon2id parameters are stored alongside the keystore and default to current OWASP-recommended settings. Unattended unlock options are in §11. Key material is held in memory only while needed and zeroed afterwards (best effort in Go), and core dumps are disabled while keys are loaded.
+Argon2id parameters are stored alongside the keystore and default to current OWASP-recommended settings. Envelope version 2 binds the salt, Argon2id parameters, and version into the AEAD associated data alongside the context, so the seal covers the exact parameters it was created with and the version byte cannot be flipped to change how an envelope opens; version 1 envelopes (static context associated data) stay readable so existing keystores keep opening, and new seals write version 2. Unattended unlock options are in §11. Key material is held in memory only while needed and zeroed afterwards (best effort in Go), and core dumps are disabled while keys are loaded.
 
 ### 4.5 Erasure coding (Reed-Solomon)
 

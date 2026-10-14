@@ -5,15 +5,26 @@ package crypto
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 
 	pverrors "petravault/internal/errors"
 )
 
-// boxVersion is the password-box envelope version.
-const boxVersion = 1
+// boxVersion is the password-box envelope version written by Lock.
+// Version 2 binds the salt, Argon2id parameters, and version into the AEAD
+// associated data (DESIGN.md §4.4), so the seal covers the exact parameters
+// it was created with and the version byte cannot be flipped to change how
+// an envelope opens.
+const boxVersion = 2
+
+// boxVersionV1 is the legacy envelope version. It used the static context
+// alone as associated data and stays readable so existing keystores keep
+// opening; new seals always write boxVersion.
+const boxVersionV1 = 1
 
 // lockedBox is the JSON envelope holding one password-sealed secret. It
 // carries the Argon2id parameters and salt next to the sealed blob, so the
@@ -45,7 +56,7 @@ func Lock(password, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer kek.Zero()
-	sealed, err := kek.Seal(plaintext, keystoreAD())
+	sealed, err := kek.Seal(plaintext, keystoreADFor(boxVersion, salt, params))
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +83,7 @@ func Unlock(password, locked []byte) ([]byte, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("%w: decode keystore envelope: trailing data", pverrors.ErrIntegrity)
 	}
-	if box.Version != boxVersion {
+	if box.Version != boxVersion && box.Version != boxVersionV1 {
 		return nil, fmt.Errorf("%w: unsupported keystore version %d: want %d", pverrors.ErrIntegrity, box.Version, boxVersion)
 	}
 	kek, err := DeriveKEK(password, box.Salt, Params{
@@ -84,11 +95,43 @@ func Unlock(password, locked []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer kek.Zero()
-	return kek.Open(box.Sealed, keystoreAD())
+	if box.Version == boxVersionV1 {
+		return kek.Open(box.Sealed, keystoreAD())
+	}
+	return kek.Open(box.Sealed, keystoreADFor(box.Version, box.Salt, Params{
+		Time:    box.Time,
+		Memory:  box.Memory,
+		Threads: box.Threads,
+	}))
 }
 
 // keystoreAD binds sealed keystore blobs to their context, so a blob sealed
-// for one purpose cannot be replayed as another.
+// for one purpose cannot be replayed as another. It is the version 1
+// associated data, kept for reading legacy envelopes.
 func keystoreAD() []byte {
 	return []byte(ContextKeystore)
+}
+
+// keystoreADFor builds the version 2 associated data: the context plus the
+// salt, Argon2id parameters, and version, each length-prefixed so the
+// encoding is unambiguous. Tampering any of them breaks authentication.
+func keystoreADFor(version int, salt []byte, params Params) []byte {
+	var ad []byte
+	ad = appendField(ad, []byte(ContextKeystore))
+	ad = appendField(ad, salt)
+	var num [8]byte
+	binary.BigEndian.PutUint64(num[:], uint64(params.Time))
+	ad = appendField(ad, num[:])
+	binary.BigEndian.PutUint64(num[:], uint64(params.Memory))
+	ad = appendField(ad, num[:])
+	ad = appendField(ad, []byte{params.Threads})
+	ad = appendField(ad, []byte(strconv.Itoa(version)))
+	return ad
+}
+
+func appendField(ad, field []byte) []byte {
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(field)))
+	ad = append(ad, lenBuf[:]...)
+	return append(ad, field...)
 }
