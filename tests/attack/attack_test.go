@@ -606,7 +606,11 @@ func TestAttackUnsafeRestorePaths(t *testing.T) {
 				CreatedAt: testTime(), Files: tt.files, ECC: "off",
 			})
 			if err != nil {
-				t.Fatal(err)
+				// Unsafe paths are refused at commit time since
+				// manifests validate paths and symlink targets: the
+				// attack is blocked even earlier than restore.
+				requireIntegrity(t, err, "commit of "+tt.name)
+				return
 			}
 			m, err := manifest.OpenTrusted(t.Context(), fx.repo, fx.repoID, fx.sub.Data, snap, trustedLookup(fx))
 			if err != nil {
