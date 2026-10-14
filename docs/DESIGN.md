@@ -287,6 +287,8 @@ Offline recovery bundle (`recovery export` / `import`). One password-encrypted f
 
 Shared member roster (`members publish` / `members sync`). The granter additionally publishes the non-revoked membership sealed under the repository data key at the single key `members.json`, signed by the publisher. Any member opens it with the master they hold, checks the publisher against their own trust list, and adopts the entries — onboarding a new machine costs one human check (the granter) instead of one per member. The roster proposes trust, never access: slots still gate every byte. It does not exclude members revoked after export (re-publish on every trust change) and does not hide membership from ex-members (they hold the master, §4.6). Adopting is explicit per run, never silent.
 
+Export freshness. Published trust lists, recovery bundles, and member rosters all carry their export time, and every `recover`, `import`, and `members sync` prints it. Data older than 30 days warns loudly on stdout and in logs: a stale record misses recent additions (safe direction: unknown signers fail closed) and recent revocations (unsafe direction: re-confirm with the team, and re-publish after every trust change). Staleness never fails the command: offline recovery must keep working without a trusted clock, and a hostile repository can only replay genuinely published data, never forge it.
+
 ### 5.3 Explicit limitations
 
 - Verifying a fingerprint never proves the real-world identity behind it. That binding rests on an initial human decision (in person, secure channel, printed fingerprint), which is why the CLI always shows full fingerprints.

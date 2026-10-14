@@ -198,7 +198,11 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "adopted %d new members from %s (published %s)\n",
 				summary.Adopted, summary.Publisher.Grouped(),
 				summary.ExportedAt.Format("2006-01-02T15:04:05Z"))
-			fmt.Fprintf(cmd.OutOrStdout(), "re-publish duty stays with the granter; re-confirm revocations with your team if this looks old\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "re-publish duty stays with the granter\n")
+			if warning := identity.ExportAgeWarning(summary.ExportedAt, nil); warning != "" {
+				logger.WarnContext(ctx, "member roster is stale", slog.String("warning", warning))
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning)
+			}
 			return nil
 		},
 	}

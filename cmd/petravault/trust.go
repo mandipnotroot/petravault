@@ -404,7 +404,7 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 		Short: "Recover your trust store from the repository copy",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := setup(f, cmd.ErrOrStderr())
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -448,7 +448,11 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "recovered trust list for %s: %d trusted, %d revoked (published %s)\n",
 				summary.Owner.Grouped(), summary.Trusted, summary.Revoked,
 				summary.ExportedAt.Format("2006-01-02T15:04:05Z"))
-			fmt.Fprintf(cmd.OutOrStdout(), "re-confirm revocations with your team if this looks old, then run verify to re-learn heads\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "run verify to re-learn heads\n")
+			if warning := identity.ExportAgeWarning(summary.ExportedAt, nil); warning != "" {
+				logger.WarnContext(ctx, "recovered trust list is stale", slog.String("warning", warning))
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning)
+			}
 			return nil
 		},
 	}
