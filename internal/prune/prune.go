@@ -493,10 +493,19 @@ func Prune(ctx context.Context, repo repository.Repository, repoCfg repository.C
 		return report, nil
 	}
 
-	// Atomicity is best-effort: snapshot deletion commits the retention
-	// decision, then packs, then indexes. A crash leaves orphans that the
-	// next prune reclaims; a partial snapshot is never created. New packs
-	// were already written during repack planning above.
+	// Crash safety: the compacted index is written before any deletion, so
+	// a crash between the two leaves duplicate indexes (harmless: clients
+	// merge them) rather than live chunks with no index. New packs were
+	// already written during repack planning above.
+	var newIndex string
+	if len(finalEntries) > 0 {
+		indexKey, err := pack.WriteIndex(ctx, repo, repoCfg.RepositoryID, dataKey, finalEntries, repoCfg.ECC)
+		if err != nil {
+			return report, fmt.Errorf("compact indexes: %w", err)
+		}
+		newIndex = indexKey
+	}
+	report.NewIndex = newIndex
 	for _, id := range report.DeletedSnapshots {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -523,19 +532,17 @@ func Prune(ctx context.Context, repo repository.Repository, repoCfg repository.C
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		// Never delete the index just written: it may sort among the old
+		// keys when no repack occurred and the content is unchanged.
+		if key == newIndex {
+			continue
+		}
 		if err := repo.DeleteObject(ctx, key); err != nil {
 			return report, fmt.Errorf("delete index %s: %w", key, err)
 		}
 		if err := repo.DeleteObject(ctx, erasure.SidecarKey(key)); err != nil {
 			return report, fmt.Errorf("delete index sidecar %s: %w", key, err)
 		}
-	}
-	if len(finalEntries) > 0 {
-		indexKey, err := pack.WriteIndex(ctx, repo, repoCfg.RepositoryID, dataKey, finalEntries, repoCfg.ECC)
-		if err != nil {
-			return report, fmt.Errorf("compact indexes: %w", err)
-		}
-		report.NewIndex = indexKey
 	}
 	logger.InfoContext(ctx, "prune finished",
 		slog.Int("retained", len(report.Retained)),
