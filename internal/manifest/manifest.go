@@ -391,8 +391,11 @@ func VerifySnapshot(sealed []byte, repoID string, dataKey crypto.SecretKey, snap
 	if err := json.Unmarshal(payload, &m, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("decode snapshot %s: %w", hexID, err)
 	}
+	// Structural defects after a verified signature mean tampering: an
+	// honestly produced manifest always validates, so these wrap
+	// ErrIntegrity (exit code 4), never usage (DESIGN.md §16).
 	if err := m.Validate(repoID); err != nil {
-		return fmt.Errorf("snapshot %s: %w", hexID, err)
+		return fmt.Errorf("snapshot %s: %w: %w", hexID, err, pverrors.ErrIntegrity)
 	}
 	return nil
 }
@@ -475,8 +478,11 @@ func openWithKey(ctx context.Context, repo repository.Repository, repoID string,
 	if err := json.Unmarshal(payload, &m, json.RejectUnknownMembers(true)); err != nil {
 		return Manifest{}, nil, fmt.Errorf("decode snapshot %s: %w", hexID, err)
 	}
+	// Structural defects after a verified signature mean tampering: an
+	// honestly produced manifest always validates, so these wrap
+	// ErrIntegrity (exit code 4), never usage (DESIGN.md §16).
 	if err := m.Validate(repoID); err != nil {
-		return Manifest{}, nil, fmt.Errorf("snapshot %s: %w", hexID, err)
+		return Manifest{}, nil, fmt.Errorf("snapshot %s: %w: %w", hexID, err, pverrors.ErrIntegrity)
 	}
 	return m, payload, nil
 }

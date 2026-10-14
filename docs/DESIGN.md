@@ -721,7 +721,7 @@ petravault prune [--keep-daily N] [--keep-weekly N] [--keep-monthly N] [--dry-ru
 are skipped; with none it fails closed). Missing-repository errors name the
 flag, environment, config, and `init` step.
 
-**Exit codes:** `0` success; `1` error; `2` usage error; `3` completed with warnings (for example, files unreadable or still changing during backup); `4` integrity or trust failure (tampering, bad signature, rollback detected, unrecoverable corruption).
+**Exit codes:** `0` success; `1` error; `2` usage error; `3` completed with warnings (for example, files unreadable or still changing during backup); `4` integrity or trust failure (tampering, bad signature, rollback detected, unrecoverable corruption, malformed manifest after signature verification — an honestly produced manifest always validates, so post-verify structural failure means tampering, while the same defect at commit time is a usage error).
 
 ---
 
