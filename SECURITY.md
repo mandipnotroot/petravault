@@ -12,8 +12,8 @@ never hand-rolled primitives (`docs/DESIGN.md` §6, §18).
 
 ## Supported versions
 
-No releases yet (design phase). Reports against `main` are welcome; include
-the commit SHA you tested.
+`main` is supported; no versioned releases yet. Reports against `main` are
+welcome; include the commit SHA you tested.
 
 ## Reporting a vulnerability
 
