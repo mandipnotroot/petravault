@@ -33,8 +33,8 @@ npx skills add JetBrains/go-modern-guidelines
    ```bash
    make check   # fmt, vet, lint, test, build, vuln, license, reuse
    ```
-5. Tests: unit tests beside the code; cross-package suites in
-   `tests/{integration,security,attack}/`. Touching crypto, trust, restore,
+5. Tests: unit tests beside the code; the cross-package attack suite in
+   `tests/attack/`. Touching crypto, trust, restore,
    locks, or scheduler → add/extend an attack test (`docs/DESIGN.md` §13).
 
 ## Commits

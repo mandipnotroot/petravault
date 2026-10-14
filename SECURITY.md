@@ -12,8 +12,11 @@ never hand-rolled primitives (`docs/DESIGN.md` §6, §18).
 
 ## Supported versions
 
-`main` is supported; no versioned releases yet. Reports against `main` are
-welcome; include the commit SHA you tested.
+`main` and versioned `v*` releases are supported. Tagged releases ship
+binaries with `SHA256SUMS`, a detached signature over it, and a CycloneDX
+SBOM (see `.github/workflows/release.yml`). Reports against `main` are
+welcome; include the commit SHA you tested. Reports against a release
+should name its tag.
 
 ## Reporting a vulnerability
 

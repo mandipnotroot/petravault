@@ -9,10 +9,10 @@ Secure, incremental, content-addressed backup with hybrid classical/post-quantum
 key protection, signed snapshots, tamper detection, Reed-Solomon erasure coding,
 built-in scheduling, and verification. Local filesystem + S3-compatible storage.
 
-Status: **usable CLI**. Phases 1–12 per `docs/DESIGN.md` §15 are
+Status: **usable CLI**. Phases 1–13 per `docs/DESIGN.md` §15 are
 implemented (local + S3 repositories, crypto, chunking, identity/trust,
 signed snapshots, key slots, erasure coding, restore/verify, prune,
-scheduling, attack suite); this phase adds the operator guides below.
+scheduling, attack suite, operator guides, demo).
 
 ## Docs
 

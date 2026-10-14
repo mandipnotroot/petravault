@@ -146,7 +146,7 @@ The directory tree is in DESIGN.md §14. Rules for working inside it:
 
 - Everything is under `internal/`. Nothing is public API until DESIGN.md says so.
 - `cmd/petravault/main.go` only wires dependencies and calls `run`. No business logic.
-- Cross-package test suites live in `tests/{integration,security,attack}/` (DESIGN.md §14); unit tests sit next to the code they cover.
+- The cross-package attack-simulation suite lives in `tests/attack/` (DESIGN.md §13, §14); unit tests sit next to the code they cover. The `Repository` contract suite lives in `internal/repository` and runs against both backends (S3 is skipped unless `PETRAVAULT_TEST_S3_ENDPOINT` is set).
 - No import cycles. Keep the layering one-directional:
 
 | Layer | Packages | May import |
@@ -799,7 +799,11 @@ func newRootCmd() *cobra.Command {
 The strategy and the attack table are DESIGN.md §13. Where and how to write the tests:
 
 - **Unit tests** are `_test.go` files beside the code. Use `package foo_test` for black-box tests.
-- **Cross-package suites** live in `tests/integration`, `tests/security`, and `tests/attack` (DESIGN.md §14). Integration tests use the build tag `integration`.
+- **Cross-package suites:** the attack-simulation suite lives in `tests/attack`
+  (one test per row of the table above). The `Repository` contract suite lives
+  in `internal/repository` and runs against both backends; the S3 side runs in
+  CI's integration job against a local S3-compatible server and is skipped
+  locally unless `PETRAVAULT_TEST_S3_ENDPOINT` is set.
 - **Every row of the attack-simulation table (DESIGN.md §13) has a test**, named after the attack. A PR that touches crypto, trust, restore, locks, or the scheduler adds or extends one.
 - **Known-answer tests** for BLAKE3 and X-Wing key slots. **Golden-boundary tests** for chunking with a fixed key and checked-in offsets in `internal/chunking/testdata/` (DESIGN.md §3.3).
 - **Fuzz** the chunker (structural invariants) and any parser of untrusted bytes: manifests, envelopes, pack headers.

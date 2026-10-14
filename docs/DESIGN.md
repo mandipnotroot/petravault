@@ -657,7 +657,7 @@ petravault/
 │   ├── restore/      # path-safe restore, partial restore (--include), file metadata (§9)
 │   ├── scheduler/    # jobs, retry, catch-up, next-run calculation, daemon loop
 │   └── verify/       # standard + deep verification, client-local head records (§9)
-├── tests/{integration,security,attack}/   # cross-package suites; unit tests sit beside the code they cover
+├── tests/attack/                # cross-package attack-simulation suite (§13); unit tests sit beside the code they cover
 ├── docs/{architecture,cryptography,threat-model,trust-model,storage,unattended}.md   # created in phase 13 (§15)
 ├── .github/workflows/ci.yml
 ├── AGENTS.md · README.md · CONTRIBUTING.md · SECURITY.md · DESIGN.md · LICENSE (GPL-3.0 text) · LICENSES/GPL-3.0-only.txt · go.mod · go.sum
