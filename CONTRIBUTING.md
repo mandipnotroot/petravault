@@ -43,6 +43,20 @@ Conventional Commits per `docs/COMMIT_GUIDE.md` (types, scopes in the table,
 `!`/`BREAKING CHANGE:` for breaking changes). One logical change per commit.
 **No AI-tool attribution** anywhere in messages, authors, or committers.
 
+## Release
+
+1. Confirm `main` is green (`ci` and `integration` jobs).
+2. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`
+   (`0.x` while the CLI contract is still settling; see `docs/DESIGN.md`
+   §16 and `docs/GO_GUIDELINES.md` §18).
+3. Wait for the `release` workflow, then review the draft release (binaries,
+   `SHA256SUMS`, SBOM, attestations).
+4. Verify: download the assets, `gh attestation verify <binary>
+   --repo <owner>/<repo>`, `sha256sum -c SHA256SUMS`, and smoke-test
+   init/backup/verify/restore in a throwaway directory.
+5. Publish the draft.
+6. Move the `Unreleased` section of `CHANGELOG.md` under the new version.
+
 ## Licensing
 
 Contributions are GPL-3.0-only. New dependencies must be GPL-3.0-compatible

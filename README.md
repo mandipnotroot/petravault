@@ -5,6 +5,10 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Petravault — Secure Incremental Backup CLI
 
+[![ci](https://github.com/mandipnotroot/petravault/actions/workflows/ci.yml/badge.svg)](https://github.com/mandipnotroot/petravault/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/mandipnotroot/petravault)](https://github.com/mandipnotroot/petravault/releases)
+[![license](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
+
 Secure, incremental, content-addressed backup with hybrid classical/post-quantum
 key protection, signed snapshots, tamper detection, Reed-Solomon erasure coding,
 built-in scheduling, and verification. Local filesystem + S3-compatible storage.
@@ -28,6 +32,7 @@ scheduling, attack suite, operator guides, demo).
 - Agent entrypoint: `AGENTS.md`
 - Contributing: `CONTRIBUTING.md`
 - Security policy: `SECURITY.md`
+- Changelog: `CHANGELOG.md`
 
 ## Prerequisites
 
