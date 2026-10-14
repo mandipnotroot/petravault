@@ -88,6 +88,8 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newECCCmd(&f))
 	root.AddCommand(newIdentityCmd(&f))
 	root.AddCommand(newTrustCmd(&f))
+	root.AddCommand(newMembersCmd(&f))
+	root.AddCommand(newRecoveryCmd(&f))
 	root.AddCommand(newVersionCmd())
 	return root
 }

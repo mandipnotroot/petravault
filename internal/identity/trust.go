@@ -179,3 +179,13 @@ func (t *TrustStore) AddRevocation(target Fingerprint, envBytes []byte) error {
 	}
 	return nil
 }
+
+// RevocationEnvelope returns the stored revocation envelope for a revoked fp.
+// PublishTrustList embeds it so recovery preserves disqualifications.
+func (t *TrustStore) RevocationEnvelope(fp Fingerprint) ([]byte, error) {
+	data, err := os.ReadFile(t.revokedPath(fp))
+	if err != nil {
+		return nil, fmt.Errorf("read revocation %s: %w", fp.Grouped(), err)
+	}
+	return data, nil
+}

@@ -26,6 +26,7 @@ petravault identity create --name alice     # also self-trusts
 petravault identity list
 petravault identity export --output alice.pub
 petravault identity import alice.pub        # then verify the fingerprint out of band
+petravault identity import alice.pub --trust # same-step trust, only for your own keys on a new machine
 ```
 
 Private keys live in `$XDG_DATA_HOME/petravault/identities/<fingerprint>/`
@@ -37,15 +38,20 @@ are an error.
 
 ```bash
 petravault trust add <fingerprint>              # CLI shows the full fingerprint first
-petravault trust add <fingerprint> --grant-read # also seals the master key to their KEM key
+petravault trust add <fingerprint> --grant-access # also seals the master key to their KEM key
 petravault trust list
 petravault trust remove <fingerprint>
+petravault trust publish   # back up your trust view to the repo (sealed, owner-only)
+petravault trust recover   # rebuild a lost local store from it
 ```
 
 There is no transitive trust. `trust add` loads the public keys from
 `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them
 only when their hash equals the confirmed fingerprint, so the repository
-copy is safe to use. A new member must trust the granting identity before
+copy is safe to use. `trust sync` lists those repo copies (fingerprint,
+name, slot, local state) for discovery, and `trust sync <fingerprint>`
+approves one with the same hash check — the typed fingerprint is the
+explicit decision. A new member must trust the granting identity before
 their client opens a key slot or the repository config that identity signed.
 
 ## Trust anchors live on the client
@@ -69,6 +75,34 @@ the recorded policy. Published copies in `revocations/` are verified against
 the local trust list before use, and records only add to the revoked list,
 never remove. A hostile repository can withhold a revocation but cannot
 forge one.
+
+## Trust backup
+
+`publish` snapshots your `trusted-keys/` plus `revoked/` records into
+`trust-lists/<your-fingerprint>.json`, sealed so only you open it and
+signed by you. `recover` asks your password, verifies that signature,
+opens the seal, and restores both, so a wiped client comes back without
+repeating every fingerprint check. It reports the snapshot's age:
+re-publish after every trust change, re-confirm revocations with the team
+when it looks old, and let the next `verify` re-learn heads.
+
+## Member roster
+
+`members publish` (usually the granter) seals the non-revoked membership
+under the repository key at `members.json`. A new machine with one trusted
+granter runs `members sync` and adopts the rest in one explicit step —
+no per-member checks to repeat. The roster never grants access by itself;
+slots do. Re-publish it on every membership change.
+
+## Offline bundle
+
+`recovery export --output /mnt/usb/alice.recovery` writes one encrypted
+file: your identity and trust view. `recovery import` restores both and
+proves both passwords by unlocking. The bundle holds no head records, so
+a recovered client re-learns rollback history on its next verify or
+backup — deletions made while it was wiped are undetectable, and the
+first post-recovery verify is trust-on-first-use. One file, same
+password, USB drawer.
 
 ## Key slots and config
 

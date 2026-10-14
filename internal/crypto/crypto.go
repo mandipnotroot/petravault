@@ -57,6 +57,10 @@ const (
 	ContextSlotGrant = "petravault slot-grant v1"
 	// ContextRepoConfig signs the repository config.
 	ContextRepoConfig = "petravault repo-config v1"
+	// ContextTrustList signs published trust-list snapshots.
+	ContextTrustList = "petravault trust-list v1"
+	// ContextMembers signs published member rosters.
+	ContextMembers = "petravault members v1"
 	// ContextRevocation signs revocation records.
 	ContextRevocation = "petravault revocation v1"
 )

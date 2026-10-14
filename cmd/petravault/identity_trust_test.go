@@ -179,7 +179,7 @@ func TestTrustGrantRead(t *testing.T) {
 
 	// Alice grants Bob read access. Bob is already trusted locally from
 	// creation; re-adding is idempotent and then seals the master key.
-	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-read")
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
 
 	if got := countSuffix(t, filepath.Join(root, "keys"), ".slot"); got != 2 {
 		t.Fatalf("keys dir holds %d slots, want alice plus bob", got)
@@ -261,7 +261,136 @@ func TestTrustGrantReadRejectsUnknownRepository(t *testing.T) {
 	out, _ := runCmd(t, "identity", "create", "--name", "alice")
 	fp := fingerprintFromCreate(t, out)
 	missing := filepath.Join(t.TempDir(), "no-repo")
-	if err := runCmdErr(t, "--repository", missing, "trust", "add", fp, "--grant-read"); err == nil {
-		t.Fatal("trust add --grant-read succeeded without a repository")
+	if err := runCmdErr(t, "--repository", missing, "trust", "add", fp, "--grant-access"); err == nil {
+		t.Fatal("trust add --grant-access succeeded without a repository")
+	}
+	if err := runCmdErr(t, "trust", "add", fp, "--grant-read"); err == nil {
+		t.Fatal("removed --grant-read flag still accepted")
+	}
+}
+
+func TestIdentityImportTrustFlag(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+
+	pubFile := filepath.Join(t.TempDir(), "alice.pub")
+	runCmd(t, "identity", "export", fp, "--output", pubFile)
+
+	// Fresh client, default import: trusted list stays empty (fail closed).
+	isolatedIdentityEnv(t, "other-password")
+	runCmd(t, "identity", "import", pubFile)
+	out, _ = runCmd(t, "trust", "list")
+	if strings.Contains(out, "alice") {
+		t.Fatalf("trust list after plain import = %q, want no trusted identities", out)
+	}
+
+	// Fresh client, import --trust: self-trusted in one step.
+	isolatedIdentityEnv(t, "third-password")
+	runCmd(t, "identity", "import", pubFile, "--trust")
+	out, _ = runCmd(t, "trust", "list")
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("trust list after import --trust = %q, want alice", out)
+	}
+}
+
+func TestTrustPublishRecover(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
+	runCmd(t, "trust", "revoke", bobFP, "--reason", "left", "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "publish")
+
+	// Lose the local trust store, keep the keys, then recover.
+	trustRoot := trustDir()
+	if err := os.RemoveAll(trustRoot); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := runCmd(t, "trust", "list")
+	if strings.Contains(out, "alice") || strings.Contains(out, "bob") {
+		t.Fatalf("trust list after wipe = %q, want empty", out)
+	}
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "recover")
+	out, _ = runCmd(t, "trust", "list")
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("trust list after recover = %q, want alice", out)
+	}
+	if !strings.Contains(out, "(revoked)") {
+		t.Fatalf("trust list after recover = %q, want bob revoked", out)
+	}
+}
+
+func TestTrustSyncFromRepoCopy(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
+
+	// Forget bob locally; the repo still holds his advisory copy.
+	runCmd(t, "trust", "remove", bobFP)
+	out, _ := runCmd(t, "--repository", root, "trust", "sync")
+	if !strings.Contains(out, "bob") || !strings.Contains(out, "untrusted") {
+		t.Fatalf("trust sync list = %q, want bob untrusted", out)
+	}
+	runCmd(t, "--repository", root, "trust", "sync", bobFP)
+	out, _ = runCmd(t, "trust", "list")
+	if !strings.Contains(out, "bob") {
+		t.Fatalf("trust list after sync = %q, want bob", out)
+	}
+}
+
+func TestTrustGrantAccessFlag(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
+
+	if got := countSuffix(t, filepath.Join(root, "keys"), ".slot"); got != 2 {
+		t.Fatalf("keys dir holds %d slots, want alice plus bob", got)
+	}
+}
+
+func TestMembersPublishSyncOnboards(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	aliceOut, _ := runCmd(t, "identity", "create", "--name", "alice")
+	aliceFP := fingerprintFromCreate(t, aliceOut)
+	bobOut, _ := runCmd(t, "identity", "create", "--name", "bob")
+	bobFP := fingerprintFromCreate(t, bobOut)
+
+	root := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", root, "--identity", aliceFP)
+	runCmd(t, "--identity", aliceFP, "--repository", root, "trust", "add", bobFP, "--grant-access")
+	runCmd(t, "--identity", aliceFP, "--repository", root, "members", "publish")
+
+	// Fresh trust store holding only the granter: one check, rest follows.
+	if err := os.RemoveAll(trustDir()); err != nil {
+		t.Fatal(err)
+	}
+	pubFile := filepath.Join(t.TempDir(), "alice.pub")
+	runCmd(t, "identity", "export", aliceFP, "--output", pubFile)
+	runCmd(t, "identity", "import", pubFile, "--trust")
+	out, _ := runCmd(t, "--identity", bobFP, "--repository", root, "members", "sync")
+	if !strings.Contains(out, "adopted 1 new members") {
+		t.Fatalf("members sync output = %q, want 1 adoption (bob)", out)
+	}
+	out, _ = runCmd(t, "trust", "list")
+	if !strings.Contains(out, "bob") {
+		t.Fatalf("trust list after sync = %q, want bob", out)
 	}
 }
