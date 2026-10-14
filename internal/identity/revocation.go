@@ -114,6 +114,14 @@ func decodeRevocationEnvelope(envBytes []byte) (*Revocation, error) {
 	return rev, err
 }
 
+// DecodeRevocation parses a revocation envelope without verifying its
+// signature. Recovery paths use it to resolve the signer key from the
+// restored trust view, then verify with VerifyRevocation before storing.
+// Never trust the result without verifying.
+func DecodeRevocation(envBytes []byte) (*Revocation, error) {
+	return decodeRevocationEnvelope(envBytes)
+}
+
 func parseRevocationEnvelope(envBytes []byte) (*Revocation, []byte, []byte, error) {
 	var env revocationEnvelope
 	if err := json.Unmarshal(envBytes, &env, json.RejectUnknownMembers(true)); err != nil {

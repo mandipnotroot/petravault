@@ -224,7 +224,7 @@ func parseMembersEnvelope(envBytes []byte) (hint string, sealed, sig []byte, err
 	}
 	sealed, err = base64.StdEncoding.DecodeString(env.Sealed)
 	if err != nil || len(sealed) == 0 {
-		return "", nil, nil, errors.New("decode members: invalid seal")
+		return "", nil, nil, fmt.Errorf("decode members: %w: invalid seal", pverrors.ErrIntegrity)
 	}
 	sig, err = base64.StdEncoding.DecodeString(env.Signature)
 	if err != nil || len(sig) != SignSignatureSize {

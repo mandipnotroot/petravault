@@ -170,7 +170,8 @@ func PublishTrustList(owner *PrivateIdentity, trust *TrustStore, now func() time
 // anyone else's list is rejected: recovery restores past decisions without
 // making new ones. A bad signature wraps ErrBadSignature (exit code 4).
 // Every trusted entry is re-validated (fingerprint recomputed) and every
-// revocation envelope is re-checked against its target before storing.
+// revocation envelope is verified against the restored keys and re-checked
+// against its target before storing.
 func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore) (*TrustListSummary, error) {
 	if owner == nil {
 		return nil, errors.New("recover trust list: owner is nil")
@@ -196,6 +197,7 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 	if !list.owner.Equal(owner.Fingerprint()) {
 		return nil, fmt.Errorf("%w: trust list names owner %s, want %s", pverrors.ErrIntegrity, list.owner.Grouped(), owner.Fingerprint().Grouped())
 	}
+	restored := make(map[string][]byte, len(list.trusted))
 	for _, raw := range list.trusted {
 		pub, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
@@ -208,6 +210,7 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 		if err := store.Add(id); err != nil {
 			return nil, fmt.Errorf("recover trust list: %w", err)
 		}
+		restored[id.Fingerprint.String()] = id.SignPublic
 	}
 	for _, raw := range list.revoked {
 		env, err := base64.StdEncoding.DecodeString(raw)
@@ -216,6 +219,13 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 		}
 		rev, err := decodeRevocationEnvelope(env)
 		if err != nil {
+			return nil, fmt.Errorf("recover trust list: %w", err)
+		}
+		signerPub, ok := restored[rev.Signer.String()]
+		if !ok {
+			return nil, fmt.Errorf("%w: trust list revocation signed by unknown %s", pverrors.ErrUntrustedSigner, rev.Signer.Grouped())
+		}
+		if _, err := VerifyRevocation(env, signerPub); err != nil {
 			return nil, fmt.Errorf("recover trust list: %w", err)
 		}
 		if err := store.AddRevocation(rev.Fingerprint, env); err != nil {
@@ -245,7 +255,7 @@ func parseTrustListEnvelope(envBytes []byte) (sealed, sig []byte, err error) {
 	}
 	sealed, err = base64.StdEncoding.DecodeString(env.Sealed)
 	if err != nil || len(sealed) == 0 {
-		return nil, nil, errors.New("decode trust list: invalid seal")
+		return nil, nil, fmt.Errorf("decode trust list: %w: invalid seal", pverrors.ErrIntegrity)
 	}
 	sig, err = base64.StdEncoding.DecodeString(env.Signature)
 	if err != nil || len(sig) != SignSignatureSize {
