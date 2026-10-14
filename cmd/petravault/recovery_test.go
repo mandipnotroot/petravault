@@ -40,8 +40,4 @@ func TestRecoveryExportImport(t *testing.T) {
 	if !strings.Contains(out, "alice") || !strings.Contains(out, "(revoked)") {
 		t.Fatalf("trust list after import = %q, want alice and bob revoked", out)
 	}
-	out, _ = runCmd(t, "recovery", "status", bundle)
-	if !strings.Contains(out, "bundle exported") {
-		t.Fatalf("recovery status output = %q, want export time", out)
-	}
 }

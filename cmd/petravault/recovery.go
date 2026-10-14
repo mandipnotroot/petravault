@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"petravault/internal/config"
 	"petravault/internal/identity"
@@ -16,12 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 )
-
-// headsDir returns the client-local head-record directory
-// ($XDG_STATE_HOME/petravault/heads).
-func headsDir() string {
-	return filepath.Join(config.StateDir(), "petravault", "heads")
-}
 
 func newRecoveryCmd(f *flags) *cobra.Command {
 	cmd := &cobra.Command{
@@ -31,7 +24,6 @@ func newRecoveryCmd(f *flags) *cobra.Command {
 	}
 	cmd.AddCommand(newRecoveryExportCmd(f))
 	cmd.AddCommand(newRecoveryImportCmd(f))
-	cmd.AddCommand(newRecoveryStatusCmd(f))
 	return cmd
 }
 
@@ -39,7 +31,7 @@ func newRecoveryExportCmd(f *flags) *cobra.Command {
 	var output string
 	cmd := &cobra.Command{
 		Use:   "export --output <file>",
-		Short: "Export the recovery bundle (identity, trust, heads)",
+		Short: "Export the recovery bundle (identity, trust)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())
@@ -59,7 +51,7 @@ func newRecoveryExportCmd(f *flags) *cobra.Command {
 			}
 			defer clear(password)
 			store := identity.NewStore(keystoreDir())
-			fileBytes, summary, err := recovery.Export(store, identity.NewTrustStore(trustDir()), headsDir(), signer.Fingerprint, password, nil)
+			fileBytes, summary, err := recovery.Export(store, identity.NewTrustStore(trustDir()), signer.Fingerprint, password, nil)
 			if err != nil {
 				return err
 			}
@@ -69,7 +61,7 @@ func newRecoveryExportCmd(f *flags) *cobra.Command {
 			logger.InfoContext(cmd.Context(), "recovery bundle exported",
 				slog.String("fingerprint", signer.Fingerprint.Grouped()))
 			fmt.Fprintf(cmd.OutOrStdout(), "exported recovery bundle for %s to %s\n", signer.Fingerprint.Grouped(), output)
-			fmt.Fprintf(cmd.OutOrStdout(), "holds: identity, %d trusted, %d revoked, %d head files\n", summary.Trusted, summary.Revoked, summary.Heads)
+			fmt.Fprintf(cmd.OutOrStdout(), "holds: identity, %d trusted, %d revoked\n", summary.Trusted, summary.Revoked)
 			fmt.Fprintf(cmd.OutOrStdout(), "store it off-machine, keep the password in your manager, re-export after trust changes\n")
 			return nil
 		},
@@ -109,54 +101,15 @@ func newRecoveryImportCmd(f *flags) *cobra.Command {
 				return err
 			}
 			defer clear(identityPassword)
-			summary, err := recovery.Import(identity.NewStore(keystoreDir()), identity.NewTrustStore(trustDir()), headsDir(), fileBytes, bundlePassword, identityPassword, ownerFP)
+			summary, err := recovery.Import(identity.NewStore(keystoreDir()), identity.NewTrustStore(trustDir()), fileBytes, bundlePassword, identityPassword, ownerFP)
 			if err != nil {
 				return err
 			}
 			logger.InfoContext(cmd.Context(), "recovery bundle imported",
 				slog.String("fingerprint", ownerFP.Grouped()))
-			fmt.Fprintf(cmd.OutOrStdout(), "imported recovery bundle for %s: identity verified, %d trusted, %d revoked, %d head files\n",
-				summary.Owner.Grouped(), summary.Trusted, summary.Revoked, summary.Heads)
+			fmt.Fprintf(cmd.OutOrStdout(), "imported recovery bundle for %s: identity verified, %d trusted, %d revoked\n",
+				summary.Owner.Grouped(), summary.Trusted, summary.Revoked)
 			fmt.Fprintf(cmd.OutOrStdout(), "run verify to re-check the repository before trusting it\n")
-			return nil
-		},
-	}
-	return cmd
-}
-
-func newRecoveryStatusCmd(f *flags) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "status <file>",
-		Short: "Compare a recovery bundle against live client state",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, _, err := setup(f, cmd.ErrOrStderr()); err != nil {
-				return err
-			}
-			fileBytes, err := os.ReadFile(args[0])
-			if err != nil {
-				return fmt.Errorf("read recovery bundle: %w", err)
-			}
-			if len(fileBytes) > 1<<20 {
-				return errors.New("recovery bundle too large")
-			}
-			password, err := identity.ReadPassword(cmd.Context(), "Enter bundle password: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			statuses, exportedAt, err := recovery.Status(headsDir(), fileBytes, password)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "bundle exported %s\n", exportedAt.Format("2006-01-02T15:04:05Z"))
-			if len(statuses) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "bundle holds no head records")
-				return nil
-			}
-			for _, st := range statuses {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", st.Repository, st.State)
-			}
 			return nil
 		},
 	}

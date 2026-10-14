@@ -97,9 +97,12 @@ slots do. Re-publish it on every membership change.
 ## Offline bundle
 
 `recovery export --output /mnt/usb/alice.recovery` writes one encrypted
-file: your identity, trust view, and heads. `recovery import` restores all
-three and proves both passwords by unlocking. `recovery status` shows
-whether the copy is behind. One file, same password, USB drawer.
+file: your identity and trust view. `recovery import` restores both and
+proves both passwords by unlocking. The bundle holds no head records, so
+a recovered client re-learns rollback history on its next verify or
+backup — deletions made while it was wiped are undetectable, and the
+first post-recovery verify is trust-on-first-use. One file, same
+password, USB drawer.
 
 ## Key slots and config
 

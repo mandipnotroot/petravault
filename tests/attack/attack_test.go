@@ -1108,30 +1108,28 @@ func TestAttackRecoveryBundleTamperedOrForged(t *testing.T) {
 	if err := fx.trust.Add(bob); err != nil {
 		t.Fatal(err)
 	}
-	headsDir := t.TempDir()
 	bundlePassword := []byte("bundle-password-attack")
-	fileBytes, _, err := recovery.Export(fx.store, fx.trust, headsDir, fx.alice.Fingerprint, bundlePassword, testTime)
+	fileBytes, _, err := recovery.Export(fx.store, fx.trust, fx.alice.Fingerprint, bundlePassword, testTime)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	newEnv := func() (*identity.Store, *identity.TrustStore, string) {
+	newEnv := func() (*identity.Store, *identity.TrustStore) {
 		root := t.TempDir()
 		return identity.NewStore(filepath.Join(root, "identities")),
-			identity.NewTrustStore(filepath.Join(root, "trust")),
-			filepath.Join(root, "heads")
+			identity.NewTrustStore(filepath.Join(root, "trust"))
 	}
 
 	// Tampered bundle bytes must fail authentication.
 	tampered := bytes.Clone(fileBytes)
 	tampered[len(tampered)/2] ^= 0x01
-	freshStore, freshTrust, freshHeads := newEnv()
-	_, err = recovery.Import(freshStore, freshTrust, freshHeads, tampered, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
+	freshStore, freshTrust := newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, tampered, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
 	requireIntegrity(t, err, "tampered recovery bundle")
 
 	// A bundle for Alice must not import as Bob.
-	freshStore, freshTrust, freshHeads = newEnv()
-	_, err = recovery.Import(freshStore, freshTrust, freshHeads, fileBytes, bundlePassword, []byte("test-password-attack"), bob.Fingerprint)
+	freshStore, freshTrust = newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, fileBytes, bundlePassword, []byte("test-password-attack"), bob.Fingerprint)
 	requireIntegrity(t, err, "recovery bundle imported under the wrong identity")
 
 	// A revocation signed by an unknown key smuggled into the bundle must
@@ -1145,12 +1143,12 @@ func TestAttackRecoveryBundleTamperedOrForged(t *testing.T) {
 	if err := fx.trust.AddRevocation(bob.Fingerprint, forged); err != nil {
 		t.Fatal(err)
 	}
-	forgedBytes, _, err := recovery.Export(fx.store, fx.trust, headsDir, fx.alice.Fingerprint, bundlePassword, testTime)
+	forgedBytes, _, err := recovery.Export(fx.store, fx.trust, fx.alice.Fingerprint, bundlePassword, testTime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	freshStore, freshTrust, freshHeads = newEnv()
-	_, err = recovery.Import(freshStore, freshTrust, freshHeads, forgedBytes, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
+	freshStore, freshTrust = newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, forgedBytes, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
 	requireIntegrity(t, err, "recovery bundle carrying a forged revocation")
 	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
 		t.Fatalf("forged bundle revocation error = %v, want an untrusted-signer failure", err)
