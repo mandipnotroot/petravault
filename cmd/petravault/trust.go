@@ -314,6 +314,19 @@ func newTrustRevokeCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Only a currently trusted signer (or the key itself for
+			// self-revocation) may revoke: an unknown local key must not
+			// disqualify arbitrary targets in the local store.
+			store := identity.NewTrustStore(trustDir())
+			if !signer.Fingerprint.Equal(target) {
+				trusted, err := store.IsTrusted(signer.Fingerprint)
+				if err != nil {
+					return err
+				}
+				if !trusted {
+					return fmt.Errorf("%w: revocation signer %s is not trusted", pverrors.ErrUntrustedSigner, signer.Fingerprint.Grouped())
+				}
+			}
 			env, err := identity.SignRevocation(priv, target, reason, nil)
 			if err != nil {
 				return err
