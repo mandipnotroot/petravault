@@ -352,7 +352,11 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 	// Head records: a recorded head that is missing, or that is neither
 	// the tip nor an ancestor of it, detects rollback or truncation
 	// (DESIGN.md §9). First use has no record and checks the chain only.
-	// Single-snapshot runs check only the requested snapshot's source.
+	// Single-snapshot runs check only the requested snapshot's source, and
+	// only checked sources advance their head records: updating unchecked
+	// sources would ratchet them backward to a truncated tip without
+	// comparison.
+	checked := tips
 	if opts.HeadsPath != "" && len(tips) > 0 {
 		heads, err := LoadHeads(opts.HeadsPath)
 		if err != nil {
@@ -370,6 +374,7 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 					}
 				}
 			}
+			checked = sourcesToCheck
 			for source, tip := range sourcesToCheck {
 				recorded, ok := heads[source]
 				if !ok {
@@ -392,8 +397,14 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 	if len(errs) > 0 {
 		return report, errors.Join(errs...)
 	}
-	if opts.HeadsPath != "" && len(tips) > 0 {
-		if err := UpdateTips(opts.HeadsPath, tips, nil); err != nil {
+	if opts.HeadsPath != "" && len(checked) > 0 {
+		toUpdate := make(map[string]string, len(checked))
+		for source := range checked {
+			if tip, ok := tips[source]; ok {
+				toUpdate[source] = tip
+			}
+		}
+		if err := UpdateTips(opts.HeadsPath, toUpdate, nil); err != nil {
 			return report, err
 		}
 	}
@@ -462,6 +473,12 @@ func verifySlot(ctx context.Context, repo repository.Repository, key, wantRepo s
 	for _, fp := range slices.Sorted(slices.Values(collectKeys(trusted))) {
 		slot, err := identity.VerifySlot(env, trusted[fp])
 		if err == nil {
+			// The verifying key must be the claimed granter. Otherwise a
+			// trusted signer could mint slots attributed to another
+			// trusted granter (audit confusion within the trusted set).
+			if fp != slot.Granter.String() {
+				continue
+			}
 			if slot.RepositoryID != wantRepo {
 				return fmt.Errorf("%w: slot %s names repository %q, want %q", pverrors.ErrIntegrity, key, slot.RepositoryID, wantRepo)
 			}
