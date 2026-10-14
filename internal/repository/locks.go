@@ -406,7 +406,9 @@ func ReleaseGCLock(ctx context.Context, repo Repository) error {
 
 // RefreshGCLock overwrites gc.lock with a fresh UpdatedAt. Only the holder
 // refreshes its own lock from its heartbeat goroutine; the write is a plain
-// PutObject because creation already won the compare-and-swap.
+// PutObject because creation already won the compare-and-swap. The refresh
+// refuses when the stored holder differs, so a stale heartbeat cannot
+// clobber a lock taken over after a reap.
 func RefreshGCLock(ctx context.Context, repo Repository, operation, holder, host string, now func() time.Time) error {
 	if repo == nil {
 		return errors.New("refresh gc lock: repository is nil")
@@ -415,19 +417,19 @@ func RefreshGCLock(ctx context.Context, repo Repository, operation, holder, host
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(holder) != "" && existing.Holder != holder {
+		return fmt.Errorf("%w: gc lock held by %q, not %q", pverrors.ErrUsage, existing.Holder, holder)
+	}
+	if strings.TrimSpace(operation) != "" && existing.Operation != operation {
+		return fmt.Errorf("%w: gc lock holds operation %q, not %q", pverrors.ErrUsage, existing.Operation, operation)
+	}
 	at := time.Now().UTC()
 	if now != nil {
 		at = now().UTC()
 	}
 	existing.UpdatedAt = at
-	if strings.TrimSpace(operation) != "" {
-		existing.Operation = operation
-	}
-	if strings.TrimSpace(holder) != "" {
-		existing.Holder = holder
-	}
-	if strings.TrimSpace(host) != "" {
-		existing.Host = host
+	if err := existing.Validate(); err != nil {
+		return err
 	}
 	if err := existing.Validate(); err != nil {
 		return err

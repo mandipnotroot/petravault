@@ -79,8 +79,8 @@ func newPruneCmd(f *flags) *cobra.Command {
 				return fmt.Errorf("%w: maintenance lock is held, refusing to prune", pverrors.ErrUsage)
 			}
 			stop := repository.StartHeartbeat(cmd.Context(), repo, repository.GCLockKey, repository.OperationPrune, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
-			defer stop()
 			defer func() {
+				stop()
 				if err := repository.ReleaseGCLock(cmd.Context(), repo); err != nil {
 					logger.WarnContext(cmd.Context(), "release maintenance lock failed", slog.Any("error", err))
 				}
