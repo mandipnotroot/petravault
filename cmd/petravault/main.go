@@ -84,6 +84,7 @@ func newRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newRestoreCmd(&f))
 	root.AddCommand(newVerifyCmd(&f))
 	root.AddCommand(newPruneCmd(&f))
+	root.AddCommand(newScheduleCmd(&f))
 	root.AddCommand(newECCCmd(&f))
 	root.AddCommand(newIdentityCmd(&f))
 	root.AddCommand(newTrustCmd(&f))

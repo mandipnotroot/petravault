@@ -10,11 +10,9 @@ import (
 	"log/slog"
 	"time"
 
-	"petravault/internal/backup"
 	"petravault/internal/config"
 	"petravault/internal/crypto"
 	"petravault/internal/identity"
-	"petravault/internal/manifest"
 	"petravault/internal/repository"
 	"petravault/internal/verify"
 
@@ -60,91 +58,33 @@ func newBackupCmd(f *flags) *cobra.Command {
 				return err
 			}
 			defer master.Zero()
-			sub := master.DeriveSubkeys()
-			defer sub.Zero()
 			sid, err := defaultSourceID(sourceID)
 			if err != nil {
 				return err
 			}
-			// Lock ordering: write backup-<id>, then check for gc.lock,
-			// then read indexes. If prune holds the lock, remove the
-			// marker and retry with backoff (DESIGN.md §10.2).
-			backupID, err := repository.NewBackupID()
-			if err != nil {
-				return err
-			}
-			holder := "backup-" + sid + "-" + backupID[:8]
-			host := repository.DefaultHost()
-			if err := waitForMaintenance(cmd.Context(), repo, backupID, holder, host, logger); err != nil {
-				return err
-			}
-			stopHeartbeat := repository.StartHeartbeat(cmd.Context(), repo, repository.BackupLockPrefix+backupID, repository.OperationBackup, holder, host, repository.DefaultHeartbeatInterval, time.Now, logger)
-			defer stopHeartbeat()
-			defer func() {
-				if err := repository.RemoveBackupMarker(context.WithoutCancel(cmd.Context()), repo, backupID); err != nil {
-					logger.WarnContext(cmd.Context(), "remove backup marker failed", slog.Any("error", err))
-				}
-			}()
-			parentID, parentFiles, parentStart, err := parentForSource(cmd.Context(), repo, repoCfg.RepositoryID, sid, sub.Data, trust, trusted)
-			if err != nil {
-				return err
-			}
-			eccSetting := eccForRun(ecc, repoCfg)
-			res, backupErr := backup.Backup(cmd.Context(), repo, backup.Options{
-				Source:         args[0],
-				RepositoryID:   repoCfg.RepositoryID,
-				Master:         master,
-				SourceID:       sid,
-				Parent:         parentFiles,
-				ParentStart:    parentStart,
-				Chunking:       chunkingFromConfig(repoCfg),
-				Excludes:       excludes,
-				ExcludeFile:    excludeFile,
-				ExcludeCaches:  excludeCaches,
-				OneFileSystem:  oneFileSystem,
-				ForceRescan:    forceRescan,
-				TargetPackSize: repoCfg.PackSize,
-				ECC:            eccSetting,
-				Logger:         logger,
-			})
+			outcome, backupErr := executeBackup(cmd.Context(), repo, repoCfg, trust, trusted, master, priv, signer, backupParams{
+				Source:        args[0],
+				SourceID:      sid,
+				Excludes:      excludes,
+				ExcludeFile:   excludeFile,
+				ExcludeCaches: excludeCaches,
+				OneFileSystem: oneFileSystem,
+				ForceRescan:   forceRescan,
+				ECC:           ecc,
+				VerifyAfter:   shouldVerifyAfterBackup(cfg, wantVerify, wantNoVerify),
+			}, logger)
 			if backupErr != nil && !errors.Is(backupErr, pverrors.ErrWarnings) {
 				return backupErr
 			}
-			snapshotID, err := manifest.Commit(cmd.Context(), repo, sub.Data, priv, manifest.CommitParams{
-				RepositoryID: repoCfg.RepositoryID,
-				SourceID:     sid,
-				Parent:       parentID,
-				Identity:     signer.Fingerprint.String(),
-				CreatedAt:    res.StartedAt,
-				Files:        backupToManifest(res.Files),
-				ECC:          eccSetting,
-			})
-			if err != nil {
-				return err
-			}
-			headsPath, err := headsPathForRepo(repoCfg.RepositoryID)
-			if err != nil {
-				return err
-			}
-			if err := verify.UpdateHead(headsPath, sid, snapshotID, nil); err != nil {
-				return err
-			}
-			logger.InfoContext(cmd.Context(), "backup committed",
-				slog.String("snapshot", snapshotID),
-				slog.String("source", sid),
-				slog.Int("files", len(res.Files)),
-				slog.Int("new_chunks", res.NewChunks),
-				slog.Int("reused_files", res.ReusedFiles))
-			fmt.Fprintf(cmd.OutOrStdout(), "snapshot %s\nsource: %s\nfiles: %d  new_chunks: %d  reused: %d  packs: %d\n",
-				snapshotID, sid, len(res.Files), res.NewChunks, res.ReusedFiles, len(res.Packs))
-			for _, w := range res.Warnings {
-				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", w)
-			}
-			if shouldVerifyAfterBackup(cfg, wantVerify, wantNoVerify) {
-				if err := verifyOne(cmd.Context(), repo, repoCfg, sub.Data, sub.ChunkID, trust, trusted, snapshotID, headsPath, false, repoCfg.ChunkMax, logger); err != nil {
-					return err
+			if outcome.SnapshotID != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "snapshot %s\nsource: %s\nfiles: %d  new_chunks: %d  reused: %d  packs: %d\n",
+					outcome.SnapshotID, sid, outcome.Files, outcome.NewChunks, outcome.Reused, outcome.Packs)
+				for _, w := range outcome.Warnings {
+					fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", w)
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "verify: ok")
+				if shouldVerifyAfterBackup(cfg, wantVerify, wantNoVerify) {
+					fmt.Fprintln(cmd.OutOrStdout(), "verify: ok")
+				}
 			}
 			// Warnings without a verification failure still map to exit 3.
 			if backupErr != nil {
