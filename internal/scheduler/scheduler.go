@@ -488,13 +488,20 @@ func ListJobs(dir string) ([]Job, error) {
 }
 
 // LoadState reads one state file. A missing file returns the zero State;
-// the caller initializes NextRun via EnsureState.
+// the caller initializes NextRun via EnsureState. Present files must be
+// mode 0600 like job files.
 func LoadState(path string) (State, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return State{}, nil
 		}
+		return State{}, fmt.Errorf("stat schedule state: %w", err)
+	}
+	if err := checkJobPermissions(path); err != nil {
+		return State{}, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
 		return State{}, fmt.Errorf("read schedule state: %w", err)
 	}
 	var wire stateFile
@@ -719,24 +726,30 @@ func Daemon(ctx context.Context, scheduleDir, stateDir string, poll time.Duratio
 }
 
 // DaemonTick loads jobs, ensures states, runs due jobs, and saves updated
-// states. It is the unit-testable body of Daemon.
+// states. It is the unit-testable body of Daemon. A corrupt job file is
+// recorded as a tick error but does not stop the remaining jobs.
 func DaemonTick(ctx context.Context, scheduleDir, stateDir string, now time.Time, runner Runner, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	jobs, err := ListJobs(scheduleDir)
-	if err != nil {
-		return err
-	}
+	jobs, loadErrs := loadJobsTolerant(scheduleDir, logger)
 	states := make(map[string]State, len(jobs))
+	var stateErrs []error
 	for _, job := range jobs {
 		state, err := EnsureState(stateDir, job, now)
 		if err != nil {
-			return fmt.Errorf("job %q: %w", job.Name, err)
+			stateErrs = append(stateErrs, fmt.Errorf("job %q: %w", job.Name, err))
+			continue
 		}
 		states[job.Name] = state
 	}
-	updated, _, errs := RunDue(ctx, jobs, states, stateDir, now, runner, logger)
+	runnable := make([]Job, 0, len(jobs))
+	for _, job := range jobs {
+		if _, ok := states[job.Name]; ok {
+			runnable = append(runnable, job)
+		}
+	}
+	updated, _, errs := RunDue(ctx, runnable, states, stateDir, now, runner, logger)
 	var saveErrs []error
 	for name, state := range updated {
 		path, err := StatePath(stateDir, name)
@@ -748,7 +761,41 @@ func DaemonTick(ctx context.Context, scheduleDir, stateDir string, now time.Time
 			saveErrs = append(saveErrs, err)
 		}
 	}
-	return errors.Join(errors.Join(collectErrs(errs)...), errors.Join(saveErrs...))
+	return errors.Join(errors.Join(loadErrs...), errors.Join(stateErrs...), errors.Join(collectErrs(errs)...), errors.Join(saveErrs...))
+}
+
+// loadJobsTolerant lists job files like ListJobs but skips corrupt files
+// with a warning instead of failing the whole tick, so one bad file cannot
+// stop every scheduled job. The CLI list command keeps using strict
+// ListJobs to surface corruption to operators.
+func loadJobsTolerant(dir string, logger *slog.Logger) ([]Job, []error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, []error{fmt.Errorf("list schedule jobs: %w", err)}
+	}
+	var out []Job
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".state.json") {
+			continue
+		}
+		job, err := LoadJob(filepath.Join(dir, name))
+		if err != nil {
+			logger.Warn("skipping corrupt schedule job", slog.String("file", name), slog.Any("error", err))
+			errs = append(errs, fmt.Errorf("schedule job %s: %w", name, err))
+			continue
+		}
+		out = append(out, job)
+	}
+	slices.SortFunc(out, func(a, b Job) int { return strings.Compare(a.Name, b.Name) })
+	return out, errs
 }
 
 func collectErrs(m map[string]error) []error {
@@ -773,16 +820,15 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// checkJobPermissions refuses job files readable by group or others.
-// Job files hold schedule configuration; like password files they must be
-// mode 0600 (DESIGN.md §11.2, §12).
+// checkJobPermissions refuses schedule files readable by group or others.
+// Job and state files must be mode 0600 (DESIGN.md §11.2, §12).
 func checkJobPermissions(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("stat schedule job: %w", err)
+		return fmt.Errorf("stat schedule file: %w", err)
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("schedule job %s: permissions %v too open, want 0600", path, fi.Mode().Perm())
+		return fmt.Errorf("schedule file %s: permissions %v too open, want 0600", path, fi.Mode().Perm())
 	}
 	return nil
 }
