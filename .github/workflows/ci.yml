@@ -50,3 +50,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4
+
+  integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      minio:
+        image: minio/minio:latest
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: petravault-test
+          MINIO_ROOT_PASSWORD: petravault-test-password
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - run: go vet ./...
+      - name: S3 contract against local MinIO
+        env:
+          PETRAVAULT_TEST_S3_ENDPOINT: http://localhost:9000
+          PETRAVAULT_S3_ALLOW_HTTP: "1"
+          PETRAVAULT_TEST_S3_BUCKET: petravault-test
+          AWS_ACCESS_KEY_ID: petravault-test
+          AWS_SECRET_ACCESS_KEY: petravault-test-password
+          AWS_REGION: us-east-1
+        run: go test -race -shuffle=on -count=1 -tags=integration ./...
