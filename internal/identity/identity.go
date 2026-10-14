@@ -255,6 +255,22 @@ func (p *PrivateIdentity) KEMPrivate() hpke.PrivateKey {
 	return p.kemPriv
 }
 
+// Zero detaches the private key material best effort (DESIGN.md §4.4): the
+// signing key struct is zero-assigned and the KEM key reference is dropped.
+// Go cannot guarantee no copies survive in garbage-collected memory, and the
+// KEM key is an interface whose concrete storage the standard library owns,
+// so this bounds key lifetime rather than proving erasure; callers defer it
+// at the end of each use.
+func (p *PrivateIdentity) Zero() {
+	if p == nil {
+		return
+	}
+	if p.signPriv != nil {
+		*p.signPriv = mldsa.PrivateKey{}
+	}
+	p.kemPriv = nil
+}
+
 // String redacts private key material.
 func (PrivateIdentity) String() string {
 	return "[redacted]"

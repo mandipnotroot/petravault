@@ -55,11 +55,12 @@ func runSnapshotsList(cmd *cobra.Command, f *flags) error {
 	if err != nil {
 		return err
 	}
-	master, _, _, err := openMaster(cmd.Context(), f, cfg, repo, trust, repoCfg.RepositoryID)
+	master, priv, _, err := openMaster(cmd.Context(), f, cfg, repo, trust, repoCfg.RepositoryID)
 	if err != nil {
 		return err
 	}
 	defer master.Zero()
+	defer priv.Zero()
 	sub := master.DeriveSubkeys()
 	defer sub.Zero()
 	ids, err := manifest.List(cmd.Context(), repo)
@@ -128,11 +129,12 @@ func newSnapshotsShowCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			master, _, _, err := openMaster(cmd.Context(), f, cfg, repo, trust, repoCfg.RepositoryID)
+			master, priv, _, err := openMaster(cmd.Context(), f, cfg, repo, trust, repoCfg.RepositoryID)
 			if err != nil {
 				return err
 			}
 			defer master.Zero()
+			defer priv.Zero()
 			sub := master.DeriveSubkeys()
 			defer sub.Zero()
 			hexID, err := resolveSnapshotID(cmd.Context(), repo, repoCfg.RepositoryID, sub.Data, trust, trusted, args[0])

@@ -63,6 +63,7 @@ unless disabled via --no-verify or verify_after_backup=false.`,
 				return err
 			}
 			defer master.Zero()
+			defer priv.Zero()
 			sid, err := defaultSourceID(sourceID)
 			if err != nil {
 				return err

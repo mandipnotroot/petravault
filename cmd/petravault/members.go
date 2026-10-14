@@ -110,6 +110,7 @@ func newMembersPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {
@@ -165,6 +166,7 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {

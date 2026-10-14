@@ -196,6 +196,7 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 	if err != nil {
 		return err
 	}
+	defer granterPriv.Zero()
 	master, err := openGranterSlot(ctx, repo, trust, repoCfg.RepositoryID, granterPriv)
 	if err != nil {
 		return err
@@ -319,6 +320,7 @@ func newTrustRevokeCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			// Only a currently trusted signer (or the key itself for
 			// self-revocation) may revoke: an unknown local key must not
 			// disqualify arbitrary targets in the local store.
@@ -385,6 +387,7 @@ func newTrustPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			env, err := identity.PublishTrustList(priv, trust, nil)
 			if err != nil {
@@ -435,6 +438,7 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			r, err := repo.GetObject(ctx, identity.TrustListKey(owner.Fingerprint))
 			if err != nil {
 				return fmt.Errorf("read published trust list for %s: %w (publish it first with `trust publish`)",

@@ -146,6 +146,7 @@ func newInitCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer creatorPriv.Zero()
 			var repo repository.Repository
 			if repository.IsS3Address(path) {
 				repo, err = repository.OpenS3(cmd.Context(), path, s3OptionsForConfig(cfg))

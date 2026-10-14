@@ -79,6 +79,7 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			repoCfg.ECC = params.Setting
 			if err := repoCfg.Validate(); err != nil {
 				return err
@@ -138,6 +139,7 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			master, err := openGranterSlot(cmd.Context(), repo, trust, repoCfg.RepositoryID, priv)
 			if err != nil {
 				return err
