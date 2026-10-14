@@ -153,6 +153,42 @@ func TestParseFingerprintRejectsAbbreviated(t *testing.T) {
 	}
 }
 
+func TestParseFingerprintRejectsNonCanonical(t *testing.T) {
+	t.Parallel()
+
+	signPub, kemPub := testKeys(t)
+	fp, err := identity.ComputeFingerprint(signPub, kemPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The final base32 character carries a single significant bit, so
+	// flipping only its unused trailing bits yields a different spelling of
+	// the same bytes. That alias must be rejected (DESIGN.md §5.1).
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	upper := strings.ToUpper(fp.String())
+	last := strings.IndexByte(alphabet, upper[51])
+	alias := upper[:51] + string(alphabet[last^0x0f])
+	for _, form := range []string{alias, strings.ToLower(alias)} {
+		if got, err := identity.ParseFingerprint(form); err == nil {
+			t.Fatalf("ParseFingerprint(%q) accepted a non-canonical spelling (decoded to %v)", form, got.Equal(fp))
+		}
+	}
+	// Changing a fully significant character must still parse, to a
+	// different fingerprint: the demo's mismatch check relies on it.
+	first := byte('A')
+	if upper[0] == 'A' {
+		first = 'B'
+	}
+	mutated := string(first) + upper[1:]
+	got, err := identity.ParseFingerprint(mutated)
+	if err != nil {
+		t.Fatalf("ParseFingerprint(%q) failed: %v", mutated, err)
+	}
+	if got.Equal(fp) {
+		t.Fatalf("ParseFingerprint(%q) matched the original fingerprint", mutated)
+	}
+}
+
 func TestParseFingerprintHexForm(t *testing.T) {
 	t.Parallel()
 

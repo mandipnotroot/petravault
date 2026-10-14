@@ -107,7 +107,10 @@ func (f Fingerprint) Grouped() string {
 // uppercase base32 with or without dashes and spaces, hex (64 characters),
 // each with an optional "b3:" prefix. Abbreviated fingerprints are rejected:
 // callers must type the full value, so acceptance is always explicit
-// (DESIGN.md §5.1). A malformed value wraps ErrUsage.
+// (DESIGN.md §5.1). Non-canonical base32 is rejected for the same reason:
+// the final character carries a single significant bit, so several
+// spellings decode to the same bytes, and only the canonical one is valid.
+// A malformed value wraps ErrUsage.
 func ParseFingerprint(s string) (Fingerprint, error) {
 	t := strings.TrimSpace(s)
 	if len(t) >= 3 && strings.EqualFold(t[:3], "b3:") {
@@ -126,9 +129,13 @@ func ParseFingerprint(s string) (Fingerprint, error) {
 		copy(f[:], raw)
 		return f, nil
 	case 52:
-		raw, err := base32NoPad.DecodeString(strings.ToUpper(t))
+		upper := strings.ToUpper(t)
+		raw, err := base32NoPad.DecodeString(upper)
 		if err != nil || len(raw) != 32 {
 			return Fingerprint{}, fmt.Errorf("%w: invalid fingerprint %q: want 52 base32 or 64 hex chars", pverrors.ErrUsage, s)
+		}
+		if base32NoPad.EncodeToString(raw) != upper {
+			return Fingerprint{}, fmt.Errorf("%w: invalid fingerprint %q: non-canonical base32", pverrors.ErrUsage, s)
 		}
 		var f Fingerprint
 		copy(f[:], raw)

@@ -16,7 +16,9 @@ metadata (name, `created_at`). The fingerprint is BLAKE3 over a
 length-prefixed encoding of both public keys under
 `"petravault identity v1"` (`ComputeFingerprint`). It displays as grouped
 base32 for read-aloud comparison; `ParseFingerprint` also accepts 64-hex
-and an optional `b3:` prefix. Public files (`public.json`) are strict JSON:
+and an optional `b3:` prefix. Non-canonical base32 spellings (differing
+only in the unused trailing bits of the final character) are rejected, so
+each identity has exactly one accepted spelling per form. Public files (`public.json`) are strict JSON:
 unknown fields rejected, keys re-validated, fingerprint recomputed.
 
 ```bash

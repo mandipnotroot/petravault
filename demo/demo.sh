@@ -313,7 +313,13 @@ FP_MALLORY="$(awk '/^fingerprint:/{print $2}' "$DEMO/mallory-create.log")"
 [ -n "$FP_MALLORY" ] || die "empty mallory fingerprint"
 expect_fail "$BIN" backup "$SRC" -r "$REPO" --source-id mallory
 use_client "$ALICE_HOME"
-BADFP="${FP_BOB%?}X"
+# Corrupt a fully significant character (the first: only the final base32
+# character has unused trailing bits, so a last-character change can alias
+# the same fingerprint instead of mismatching).
+case "$FP_BOB" in
+a* | A*) BADFP="b${FP_BOB#?}" ;;
+*) BADFP="a${FP_BOB#?}" ;;
+esac
 expect_code 4 "$BIN" trust add "$BADFP" --from "$DEMO/bob.pub" -r "$REPO"
 grep -q "want" "$DEMO/last.log" || die "fingerprint mismatch was not reported"
 "$BIN" trust list | tee "$DEMO/trust.log"
