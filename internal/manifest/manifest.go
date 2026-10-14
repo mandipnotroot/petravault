@@ -406,15 +406,9 @@ func VerifySnapshot(sealed []byte, repoID string, dataKey crypto.SecretKey, snap
 // wrap ErrIntegrity, so a valid snapshot cannot be replayed into a different
 // repository or renamed.
 func Open(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, snapshotID string, signPub []byte) (Manifest, error) {
-	id, err := ParseSnapshotID(snapshotID)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("%w: %w", pverrors.ErrUsage, err)
-	}
-	hexID := FormatSnapshotID(id)
-	m, _, err := openWithKey(ctx, repo, repoID, dataKey, hexID, func(_ string) ([]byte, error) {
+	return OpenTrusted(ctx, repo, repoID, dataKey, snapshotID, func(_ string) ([]byte, error) {
 		return signPub, nil
 	})
-	return m, err
 }
 
 // OpenTrusted decrypts the snapshot object, resolves the signer's public

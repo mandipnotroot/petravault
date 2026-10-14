@@ -62,6 +62,13 @@ type Entry struct {
 	Length int64
 }
 
+// validEntry reports whether e names a readable sealed blob. Offsets are
+// absolute and lengths cover the sealed blob only; anything else is
+// structural damage from storage, never a valid reference.
+func validEntry(e Entry) bool {
+	return e.Pack != "" && e.Offset >= 0 && e.Length > 0
+}
+
 // ChunkRef describes one blob listed in a pack header.
 type ChunkRef struct {
 	ID     [32]byte
@@ -323,7 +330,7 @@ func VerifyPack(content []byte, repoID string, dataKey crypto.SecretKey, packKey
 // failure from storage, authentication, or verification is reported; tampered
 // or misplaced blobs wrap ErrIntegrity and yield no plaintext.
 func ReadChunk(ctx context.Context, repo repository.Repository, repoID string, dataKey, chunkIDKey crypto.SecretKey, e Entry, maxSize int) ([]byte, error) {
-	if e.Pack == "" || e.Offset < 0 || e.Length <= 0 {
+	if !validEntry(e) {
 		return nil, fmt.Errorf("invalid index entry for chunk %s", FormatID(e.ID))
 	}
 	sealed, err := readAll(ctx, repo, e.Pack, e.Offset, e.Length)
@@ -363,7 +370,7 @@ func WriteIndex(ctx context.Context, repo repository.Repository, repoID string, 
 	file := indexFile{Version: Version, Algorithm: crypto.AEADID}
 	seen := make(map[[32]byte]bool, len(sorted))
 	for _, e := range sorted {
-		if e.Pack == "" || e.Offset < 0 || e.Length <= 0 {
+		if !validEntry(e) {
 			return "", fmt.Errorf("invalid index entry for chunk %s", FormatID(e.ID))
 		}
 		if seen[e.ID] {

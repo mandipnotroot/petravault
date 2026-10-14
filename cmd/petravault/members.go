@@ -101,12 +101,7 @@ func newMembersPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(ctx, "Enter password for publishing identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(ctx, signer.Fingerprint, "Enter password for publishing identity: ")
 			if err != nil {
 				return err
 			}
@@ -157,12 +152,7 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(ctx, "Enter password for syncing identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(ctx, signer.Fingerprint, "Enter password for syncing identity: ")
 			if err != nil {
 				return err
 			}

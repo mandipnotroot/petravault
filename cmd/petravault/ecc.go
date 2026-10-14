@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"petravault/internal/crypto"
 	"petravault/internal/erasure"
@@ -50,32 +49,15 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, err := openRepo(cmd.Context(), cfg, repoPath)
+			repo, repoCfg, _, _, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
-				return err
-			}
-			trust := identity.NewTrustStore(trustDir())
-			trusted, err := listTrustedSigners(trust)
-			if err != nil {
-				return err
-			}
-			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
-			if err != nil {
-				return err
-			}
-			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(cmd.Context(), "Enter password for signing identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(cmd.Context(), signer.Fingerprint, "Enter password for signing identity: ")
 			if err != nil {
 				return err
 			}
@@ -110,32 +92,15 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, err := openRepo(cmd.Context(), cfg, repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
-				return err
-			}
-			trust := identity.NewTrustStore(trustDir())
-			trusted, err := listTrustedSigners(trust)
-			if err != nil {
-				return err
-			}
-			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
-			if err != nil {
-				return err
-			}
-			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(cmd.Context(), "Enter password for reading identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(cmd.Context(), signer.Fingerprint, "Enter password for reading identity: ")
 			if err != nil {
 				return err
 			}
@@ -151,22 +116,10 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			// it does not wait for backup markers: backups keep running
 			// while it holds the lock (DESIGN.md §10.2).
 			holder := "ecc-rebuild-" + repository.DefaultHost()
-			acquired, err := repository.TryAcquireGCLock(cmd.Context(), repo, repository.OperationECCRebuild, holder, repository.DefaultHost(), repository.DefaultLockTTL, time.Now)
-			if err != nil {
-				return err
-			}
-			if !acquired {
-				return fmt.Errorf("%w: maintenance lock is held, refusing to rebuild", pverrors.ErrUsage)
-			}
-			stop := repository.StartHeartbeat(cmd.Context(), repo, repository.GCLockKey, repository.OperationECCRebuild, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
-			defer func() {
-				stop()
-				if err := repository.ReleaseGCLock(cmd.Context(), repo); err != nil {
-					logger.WarnContext(cmd.Context(), "release maintenance lock failed", slog.Any("error", err))
-				}
-			}()
 			verify := rebuildVerifier(repoCfg.RepositoryID, sub.Data, trust, trusted)
-			if err := repository.Rebuild(cmd.Context(), repo, repoCfg.ECC, verify); err != nil {
+			if err := withGCLock(cmd.Context(), repo, repository.OperationECCRebuild, holder, "maintenance lock is held, refusing to rebuild", logger, func() error {
+				return repository.Rebuild(cmd.Context(), repo, repoCfg.ECC, verify)
+			}); err != nil {
 				return err
 			}
 			params, err := erasure.Resolve(repoCfg.ECC)

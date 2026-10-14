@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -322,40 +323,34 @@ func newScheduleRemoveCmd(f *flags) *cobra.Command {
 }
 
 func newScheduleEnableCmd(f *flags) *cobra.Command {
-	return &cobra.Command{
-		Use:   "enable <name>",
-		Short: "Enable a scheduled backup job",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, logger, err := setup(f, cmd.ErrOrStderr())
-			if err != nil {
-				return err
-			}
-			if err := setJobEnabled(args[0], true); err != nil {
-				return err
-			}
-			logger.InfoContext(cmd.Context(), "schedule job enabled", slog.String("job", args[0]))
-			fmt.Fprintf(cmd.OutOrStdout(), "enabled job %q\n", args[0])
-			return nil
-		},
-	}
+	return newScheduleToggleCmd(f, true)
 }
 
 func newScheduleDisableCmd(f *flags) *cobra.Command {
+	return newScheduleToggleCmd(f, false)
+}
+
+func newScheduleToggleCmd(f *flags, enabled bool) *cobra.Command {
+	verb := "enable"
+	past := "enabled"
+	if !enabled {
+		verb = "disable"
+		past = "disabled"
+	}
 	return &cobra.Command{
-		Use:   "disable <name>",
-		Short: "Disable a scheduled backup job",
+		Use:   verb + " <name>",
+		Short: strings.ToUpper(verb[:1]) + verb[1:] + " a scheduled backup job",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
-			if err := setJobEnabled(args[0], false); err != nil {
+			if err := setJobEnabled(args[0], enabled); err != nil {
 				return err
 			}
-			logger.InfoContext(cmd.Context(), "schedule job disabled", slog.String("job", args[0]))
-			fmt.Fprintf(cmd.OutOrStdout(), "disabled job %q\n", args[0])
+			logger.InfoContext(cmd.Context(), "schedule job "+past, slog.String("job", args[0]))
+			fmt.Fprintf(cmd.OutOrStdout(), "%s job %q\n", past, args[0])
 			return nil
 		},
 	}
@@ -555,7 +550,7 @@ func scheduleRunner(f *flags, cfg config.Config, logger *slog.Logger) scheduler.
 // saveStates persists updated job states after a run.
 func saveStates(stateDir string, states map[string]scheduler.State) error {
 	var errs []error
-	for _, name := range slices.Sorted(slices.Values(collectStateNames(states))) {
+	for _, name := range slices.Sorted(maps.Keys(states)) {
 		path, err := scheduler.StatePath(stateDir, name)
 		if err != nil {
 			errs = append(errs, err)
@@ -568,17 +563,16 @@ func saveStates(stateDir string, states map[string]scheduler.State) error {
 	return errors.Join(errs...)
 }
 
-func collectStateNames(states map[string]scheduler.State) []string {
-	out := make([]string, 0, len(states))
-	for name := range states {
-		out = append(out, name)
-	}
-	return out
-}
-
 // printRunResults reports per-job snapshots and failures to stdout.
 func printRunResults(cmd *cobra.Command, results map[string]scheduler.Result, errs map[string]error) {
-	for _, name := range slices.Sorted(slices.Values(collectResultNames(results, errs))) {
+	seen := make(map[string]struct{}, len(results)+len(errs))
+	for name := range results {
+		seen[name] = struct{}{}
+	}
+	for name := range errs {
+		seen[name] = struct{}{}
+	}
+	for _, name := range slices.Sorted(maps.Keys(seen)) {
 		if err, ok := errs[name]; ok {
 			fmt.Fprintf(cmd.OutOrStdout(), "job %q failed: %v\n", name, err)
 			continue
@@ -587,37 +581,14 @@ func printRunResults(cmd *cobra.Command, results map[string]scheduler.Result, er
 	}
 }
 
-func collectResultNames(results map[string]scheduler.Result, errs map[string]error) []string {
-	seen := make(map[string]bool)
-	for name := range results {
-		seen[name] = true
-	}
-	for name := range errs {
-		seen[name] = true
-	}
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	return out
-}
-
 // joinJobErrors combines per-job failures preserving error matching (exit
 // codes map integrity failures to 4 even when joined).
 func joinJobErrors(errs map[string]error) error {
 	out := make([]error, 0, len(errs))
-	for _, name := range slices.Sorted(slices.Values(collectErrNames(errs))) {
+	for _, name := range slices.Sorted(maps.Keys(errs)) {
 		out = append(out, fmt.Errorf("job %q: %w", name, errs[name]))
 	}
 	return errors.Join(out...)
-}
-
-func collectErrNames(errs map[string]error) []string {
-	out := make([]string, 0, len(errs))
-	for name := range errs {
-		out = append(out, name)
-	}
-	return out
 }
 
 func enabledMarker(job scheduler.Job) string {

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -185,7 +186,7 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 				merged[e.ID] = e
 			}
 		}
-		if warn := checkSidecar(ctx, repo, key, sealed, opts.Deep); warn != "" {
+		if warn := checkSidecar(ctx, repo, key, sealed); warn != "" {
 			report.Warnings = append(report.Warnings, warn)
 		} else if opts.Deep {
 			if err := checkParity(ctx, repo, key, sealed); err != nil {
@@ -223,7 +224,7 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 			continue
 		}
 		manifests[hexID] = m
-		if warn := checkSidecar(ctx, repo, manifest.SnapshotPrefix+hexID, sealed, opts.Deep); warn != "" {
+		if warn := checkSidecar(ctx, repo, manifest.SnapshotPrefix+hexID, sealed); warn != "" {
 			report.Warnings = append(report.Warnings, warn)
 		} else if opts.Deep {
 			if err := checkParity(ctx, repo, manifest.SnapshotPrefix+hexID, sealed); err != nil {
@@ -274,11 +275,9 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 				}
 			}
 		}
-		for _, entries := range []map[[32]byte]pack.Entry{merged} {
-			for _, e := range entries {
-				if !packSet[e.Pack] {
-					errs = append(errs, fmt.Errorf("%w: index entry for chunk %s names missing pack %s", pverrors.ErrIntegrity, pack.FormatID(e.ID), e.Pack))
-				}
+		for _, e := range merged {
+			if !packSet[e.Pack] {
+				errs = append(errs, fmt.Errorf("%w: index entry for chunk %s names missing pack %s", pverrors.ErrIntegrity, pack.FormatID(e.ID), e.Pack))
 			}
 		}
 	}
@@ -470,7 +469,7 @@ func verifySlot(ctx context.Context, repo repository.Repository, key, wantRepo s
 	if err != nil {
 		return fmt.Errorf("read %s: %w", key, err)
 	}
-	for _, fp := range slices.Sorted(slices.Values(collectKeys(trusted))) {
+	for _, fp := range slices.Sorted(maps.Keys(trusted)) {
 		slot, err := identity.VerifySlot(env, trusted[fp])
 		if err == nil {
 			// The verifying key must be the claimed granter. Otherwise a
@@ -501,14 +500,6 @@ func verifySlot(ctx context.Context, repo repository.Repository, key, wantRepo s
 		}
 	}
 	return fmt.Errorf("%w: slot %s signature is not trusted", pverrors.ErrUntrustedSigner, key)
-}
-
-func collectKeys(m map[string][]byte) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
 
 func openTrustedSnapshot(ctx context.Context, repo repository.Repository, repoCfg repository.Config, dataKey crypto.SecretKey, hexID string, trust *identity.TrustStore, trusted map[string][]byte) (manifest.Manifest, error) {
@@ -543,8 +534,7 @@ func openTrustedSnapshot(ctx context.Context, repo repository.Repository, repoCf
 // crash, and objects intentionally written with --ecc off legitimately
 // have none, so absence is reported, never silently ignored, but does not
 // fail standard verification.
-func checkSidecar(ctx context.Context, repo repository.Repository, objectKey string, objectBytes []byte, deep bool) string {
-	_ = deep
+func checkSidecar(ctx context.Context, repo repository.Repository, objectKey string, objectBytes []byte) string {
 	exists, err := repo.Exists(ctx, erasure.SidecarKey(objectKey))
 	if err != nil {
 		return "sidecar check failed for " + objectKey + ": " + err.Error()
