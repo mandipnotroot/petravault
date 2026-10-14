@@ -148,6 +148,7 @@ func (w *Writer) Add(id [32]byte, plaintext []byte) error {
 		return err
 	}
 	sealed, err := w.dataKey.Seal(compressed, crypto.AssociatedData(w.repoID, ObjectChunk, FormatID(id)))
+	clear(compressed)
 	if err != nil {
 		return fmt.Errorf("seal chunk %s: %w", FormatID(id), err)
 	}
@@ -253,6 +254,9 @@ func ListPackEntries(ctx context.Context, repo repository.Repository, repoID str
 	if err != nil {
 		return nil, err
 	}
+	if err := checkContentKey(packKey, PackPrefix, content); err != nil {
+		return nil, err
+	}
 	refs, err := parsePack(content, repoID, dataKey, packKey)
 	if err != nil {
 		return nil, err
@@ -272,11 +276,29 @@ func ListPackEntries(ctx context.Context, repo repository.Repository, repoID str
 	return out, nil
 }
 
+// checkContentKey verifies that a content-addressed object matches its key:
+// pack and index names are the BLAKE3 hash of their ciphertext (DESIGN.md
+// §8). A swapped or renamed object fails closed here; per-chunk AEAD and
+// index references remain the forgery boundary.
+func checkContentKey(objectKey, prefix string, content []byte) error {
+	name, ok := strings.CutPrefix(objectKey, prefix)
+	if !ok {
+		return fmt.Errorf("%w: unexpected key %q", pverrors.ErrIntegrity, objectKey)
+	}
+	if got := FormatID(crypto.Sum256(content)); got != strings.ToLower(strings.TrimSpace(name)) {
+		return fmt.Errorf("%w: object %s content does not match its name", pverrors.ErrIntegrity, objectKey)
+	}
+	return nil
+}
+
 // VerifyPack authenticates every byte of one pack held in memory: the header
 // and each chunk blob bound to its chunk ID. It backs repair-then-verify
 // flows (DESIGN.md §4.5) that must check repaired bytes without rereading
 // storage. Failures wrap ErrIntegrity and yield no plaintext.
 func VerifyPack(content []byte, repoID string, dataKey crypto.SecretKey, packKey string) error {
+	if err := checkContentKey(packKey, PackPrefix, content); err != nil {
+		return err
+	}
 	refs, err := parsePack(content, repoID, dataKey, packKey)
 	if err != nil {
 		return err
@@ -378,6 +400,9 @@ func WriteIndex(ctx context.Context, repo repository.Repository, repoID string, 
 // repair-then-verify flows that must check repaired bytes without rereading
 // storage. Failures wrap ErrIntegrity.
 func VerifyIndex(sealed []byte, repoID string, dataKey crypto.SecretKey, indexKey string) error {
+	if err := checkContentKey(indexKey, IndexPrefix, sealed); err != nil {
+		return err
+	}
 	_, err := decodeIndex(sealed, repoID, dataKey, indexKey)
 	return err
 }
@@ -386,6 +411,9 @@ func VerifyIndex(sealed []byte, repoID string, dataKey crypto.SecretKey, indexKe
 func ReadIndex(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, indexKey string) ([]Entry, error) {
 	sealed, err := readAll(ctx, repo, indexKey, -1, -1)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkContentKey(indexKey, IndexPrefix, sealed); err != nil {
 		return nil, err
 	}
 	return decodeIndex(sealed, repoID, dataKey, indexKey)

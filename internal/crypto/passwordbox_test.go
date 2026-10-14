@@ -5,6 +5,8 @@ package crypto_test
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -93,7 +95,7 @@ func TestUnlockRejectsUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withExtra := bytes.Replace(locked, []byte(`"version":1`), []byte(`"version":1,"extra":true`), 1)
+	withExtra := bytes.Replace(locked, []byte(`"version":2`), []byte(`"version":2,"extra":true`), 1)
 	if _, err := crypto.Unlock([]byte("password"), withExtra); err == nil {
 		t.Fatal("Unlock accepted an unknown envelope field, want rejection")
 	}
@@ -110,7 +112,7 @@ func TestUnlockRejectsBadEnvelope(t *testing.T) {
 	}{
 		{name: "garbage", locked: []byte("not json")},
 		{name: "trailing data", locked: append(bytes.Clone(locked), []byte(" {}")...)},
-		{name: "wrong version", locked: bytes.Replace(locked, []byte(`"version":1`), []byte(`"version":2`), 1)},
+		{name: "wrong version", locked: bytes.Replace(locked, []byte(`"version":2`), []byte(`"version":99`), 1)},
 		{name: "empty", locked: nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,4 +146,94 @@ func TestLockEnvelopeCarriesParams(t *testing.T) {
 			t.Fatalf("envelope misses %s", field)
 		}
 	}
+}
+
+func TestUnlockTamperedParamsFailClosed(t *testing.T) {
+	locked, err := crypto.Lock([]byte("password"), []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The envelope must name version 2.
+	if !bytes.Contains(locked, []byte(`"version":2`)) {
+		t.Fatal("envelope does not name version 2")
+	}
+	// Weakening the Argon2id parameters keeps the JSON valid, so the
+	// tamper reaches authentication: it must fail closed as an
+	// integrity failure, never open under the substituted parameters.
+	weakened := bytes.Replace(locked, []byte(`"threads":4`), []byte(`"threads":5`), 1)
+	if bytes.Equal(weakened, locked) {
+		t.Fatal("envelope has no threads field to weaken")
+	}
+	opened, err := crypto.Unlock([]byte("password"), weakened)
+	if err == nil {
+		t.Fatal("Unlock opened an envelope with substituted parameters, want failure")
+	}
+	if len(opened) != 0 {
+		t.Fatal("Unlock returned plaintext on failure, want none")
+	}
+	if !isIntegrity(err) {
+		t.Fatalf("substituted-parameter error = %v, want an integrity failure", err)
+	}
+	// The salt is bound the same way.
+	salted := flipFieldChar(t, locked, `"salt":"`)
+	if _, err := crypto.Unlock([]byte("password"), salted); err == nil {
+		t.Fatal("Unlock opened an envelope with a substituted salt, want failure")
+	}
+}
+
+// TestUnlockV1EnvelopeStillOpens pins backward compatibility: envelopes
+// sealed under the legacy static context open, while the same tampering
+// applied to them fails closed.
+func TestUnlockV1EnvelopeStillOpens(t *testing.T) {
+	password := []byte("password")
+	secret := []byte("legacy secret")
+	salt := bytes.Repeat([]byte{0x5a}, crypto.SaltLength)
+	kek, err := crypto.DeriveKEK(password, salt, crypto.DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kek.Zero()
+	sealed, err := kek.Seal(secret, []byte(crypto.ContextKeystore))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := []byte(fmt.Sprintf(
+		`{"version":1,"time":%d,"memory_kib":%d,"threads":%d,"salt":"%s","sealed":"%s"}`,
+		3, 65536, 4,
+		base64.StdEncoding.EncodeToString(salt),
+		base64.StdEncoding.EncodeToString(sealed)))
+	opened, err := crypto.Unlock(password, locked)
+	if err != nil {
+		t.Fatalf("Unlock rejected a legacy version 1 envelope: %v", err)
+	}
+	if !bytes.Equal(opened, secret) {
+		t.Fatal("Unlock did not return the legacy secret")
+	}
+	// A version byte flipped from 1 to 2 must not open: the blob was
+	// sealed under the version 1 associated data.
+	downgraded := bytes.Replace(locked, []byte(`"version":1`), []byte(`"version":2`), 1)
+	if _, err := crypto.Unlock(password, downgraded); err == nil {
+		t.Fatal("Unlock opened a version-flipped envelope, want failure")
+	}
+}
+
+// flipFieldChar flips one base64 character inside the named envelope field,
+// keeping the JSON framing valid.
+func flipFieldChar(t *testing.T, locked []byte, marker string) []byte {
+	t.Helper()
+	i := bytes.Index(locked, []byte(marker))
+	if i < 0 {
+		t.Fatalf("envelope has no %s field", marker)
+	}
+	j := i + len(marker)
+	if j >= len(locked) {
+		t.Fatalf("envelope field %s is empty", marker)
+	}
+	out := bytes.Clone(locked)
+	if out[j] == 'A' {
+		out[j] = 'B'
+	} else {
+		out[j] = 'A'
+	}
+	return out
 }

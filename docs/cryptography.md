@@ -73,7 +73,9 @@ average 1 MiB / max 8 MiB defaults).
 Private keys live on the client (`$XDG_DATA_HOME/petravault/identities/<fp>/`),
 never in the repository. `internal/crypto/kdf.go` + `passwordbox.go`:
 Argon2id defaults (time 3, memory 64 MiB, threads 4), 16-byte random salt,
-sealed box with associated data `"petravault keystore v1"`. Unattended
+sealed box version 2 whose associated data binds the context, salt,
+parameters, and version (version 1 boxes with static-context associated
+data stay readable). Unattended
 unlock is `PETRAVAULT_PASSWORD_COMMAND`, then a mode-`0600`
 `PETRAVAULT_PASSWORD_FILE`, then an interactive prompt; passwords never come
 from flags, `config.yaml`, or job files. Key material is zeroed after use

@@ -67,13 +67,17 @@ Job definition example (`$XDG_CONFIG_HOME/petravault/schedule/*.json`):
 Scheduled jobs cannot prompt. The keystore unlock order is fixed:
 
 1. `PETRAVAULT_PASSWORD_COMMAND`: prints the password
-   (`secret-tool`, `pass`, cloud secret managers, keyring).
+   (`secret-tool`, `pass`, cloud secret managers, keyring). Helpers run
+   under a 60s timeout so a hanging helper cannot block unlock forever.
 2. `PETRAVAULT_PASSWORD_FILE`: file must be mode `0600`, refused otherwise.
 3. Interactive prompt (manual runs only).
 
 Passwords never live in `config.yaml` or job files and are never passed as
 CLI arguments. Give scheduled machines a dedicated identity so it can be
-revoked alone.
+revoked alone. The daemon environment is fully trusted input — anyone who
+controls it already runs code as the backup user — so keep unit files and
+`EnvironmentFile`s mode `0600` and never inject secrets through container
+or orchestrator environment.
 
 ## Configuration
 

@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -194,11 +196,34 @@ func validateFile(f File) error {
 	default:
 		return fmt.Errorf("%w: invalid file type %q for %q", pverrors.ErrUsage, f.Type, f.Path)
 	}
-	if f.Type == TypeSymlink && f.Target == "" {
-		return fmt.Errorf("%w: symlink %q has no target", pverrors.ErrUsage, f.Path)
+	// Paths are untrusted filesystem input even after the signature
+	// verifies (DESIGN.md §9): reject anything restore would refuse so
+	// verify never attests an un-restorable repository.
+	if f.Path == "" || !filepath.IsLocal(filepath.FromSlash(f.Path)) || f.Path == "." {
+		return fmt.Errorf("%w: unsafe manifest path %q", pverrors.ErrIntegrity, f.Path)
 	}
-	if f.Type != TypeSymlink && f.Target != "" {
+	if cleaned := path.Clean(f.Path); cleaned != f.Path {
+		return fmt.Errorf("%w: manifest path %q is not canonical", pverrors.ErrIntegrity, f.Path)
+	}
+	if f.Type == TypeSymlink {
+		if f.Target == "" {
+			return fmt.Errorf("%w: symlink %q has no target", pverrors.ErrUsage, f.Path)
+		}
+		if filepath.IsAbs(f.Target) {
+			return fmt.Errorf("%w: symlink %q points outside the destination", pverrors.ErrIntegrity, f.Path)
+		}
+		parent, _, found := strings.CutLast(f.Path, "/")
+		if !found {
+			parent = ""
+		}
+		if joined := filepath.Join(filepath.FromSlash(parent), f.Target); !filepath.IsLocal(joined) {
+			return fmt.Errorf("%w: symlink %q points outside the destination", pverrors.ErrIntegrity, f.Path)
+		}
+	} else if f.Target != "" {
 		return fmt.Errorf("%w: non-symlink %q has a target", pverrors.ErrUsage, f.Path)
+	}
+	if f.Type == TypeFile && f.Size < 0 {
+		return fmt.Errorf("%w: file %q has negative size %d", pverrors.ErrIntegrity, f.Path, f.Size)
 	}
 	for _, id := range f.Chunks {
 		raw, err := hex.DecodeString(id)
@@ -366,8 +391,11 @@ func VerifySnapshot(sealed []byte, repoID string, dataKey crypto.SecretKey, snap
 	if err := json.Unmarshal(payload, &m, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("decode snapshot %s: %w", hexID, err)
 	}
+	// Structural defects after a verified signature mean tampering: an
+	// honestly produced manifest always validates, so these wrap
+	// ErrIntegrity (exit code 4), never usage (DESIGN.md §16).
 	if err := m.Validate(repoID); err != nil {
-		return fmt.Errorf("snapshot %s: %w", hexID, err)
+		return fmt.Errorf("snapshot %s: %w: %w", hexID, err, pverrors.ErrIntegrity)
 	}
 	return nil
 }
@@ -450,8 +478,11 @@ func openWithKey(ctx context.Context, repo repository.Repository, repoID string,
 	if err := json.Unmarshal(payload, &m, json.RejectUnknownMembers(true)); err != nil {
 		return Manifest{}, nil, fmt.Errorf("decode snapshot %s: %w", hexID, err)
 	}
+	// Structural defects after a verified signature mean tampering: an
+	// honestly produced manifest always validates, so these wrap
+	// ErrIntegrity (exit code 4), never usage (DESIGN.md §16).
 	if err := m.Validate(repoID); err != nil {
-		return Manifest{}, nil, fmt.Errorf("snapshot %s: %w", hexID, err)
+		return Manifest{}, nil, fmt.Errorf("snapshot %s: %w: %w", hexID, err, pverrors.ErrIntegrity)
 	}
 	return m, payload, nil
 }

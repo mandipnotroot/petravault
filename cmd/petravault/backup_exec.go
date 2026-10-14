@@ -72,8 +72,8 @@ func executeBackup(ctx context.Context, repo repository.Repository, repoCfg repo
 		return outcome, err
 	}
 	stopHeartbeat := repository.StartHeartbeat(ctx, repo, repository.BackupLockPrefix+backupID, repository.OperationBackup, holder, host, repository.DefaultHeartbeatInterval, time.Now, logger)
-	defer stopHeartbeat()
 	defer func() {
+		stopHeartbeat()
 		if err := repository.RemoveBackupMarker(context.WithoutCancel(ctx), repo, backupID); err != nil {
 			logger.WarnContext(ctx, "remove backup marker failed", slog.Any("error", err))
 		}
@@ -167,8 +167,8 @@ func pruneAfterJob(ctx context.Context, repo repository.Repository, repoCfg repo
 		return nil
 	}
 	stop := repository.StartHeartbeat(ctx, repo, repository.GCLockKey, repository.OperationPrune, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
-	defer stop()
 	defer func() {
+		stop()
 		if err := repository.ReleaseGCLock(ctx, repo); err != nil {
 			logger.WarnContext(ctx, "release maintenance lock failed", slog.Any("error", err))
 		}

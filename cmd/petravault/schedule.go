@@ -516,6 +516,7 @@ func scheduleRunner(f *flags, cfg config.Config, logger *slog.Logger) scheduler.
 			return "", err
 		}
 		defer master.Zero()
+		defer priv.Zero()
 		outcome, backupErr := executeBackup(ctx, repo, repoCfg, trust, trusted, master, priv, signer, backupParams{
 			Source:      job.Source,
 			SourceID:    job.SourceID,

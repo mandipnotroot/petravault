@@ -169,8 +169,11 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 	if err != nil {
 		return err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, configSigner, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
+		return err
+	}
+	if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 		return err
 	}
 	granter, err := resolveSigner(f, cfg)
@@ -193,6 +196,7 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 	if err != nil {
 		return err
 	}
+	defer granterPriv.Zero()
 	master, err := openGranterSlot(ctx, repo, trust, repoCfg.RepositoryID, granterPriv)
 	if err != nil {
 		return err
@@ -247,7 +251,9 @@ func openGranterSlot(ctx context.Context, repo repository.Repository, trust *ide
 
 // listTrustedSigners builds the fingerprint-to-signing-key map for
 // repository config verification from the client-local trust list. Revoked
-// entries are included here so historical configs stay openable; the granter
+// entries are included so every signature attributes to its signer first;
+// callers then refuse revoked or removed signers (requireTrustedConfigSigner)
+// while snapshot history keeps its own revocation-aware checks. The granter
 // itself must still be currently trusted (IsTrusted) to grant read access.
 func listTrustedSigners(trust *identity.TrustStore) (map[string][]byte, error) {
 	listed, err := trust.List()
@@ -314,6 +320,20 @@ func newTrustRevokeCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
+			// Only a currently trusted signer (or the key itself for
+			// self-revocation) may revoke: an unknown local key must not
+			// disqualify arbitrary targets in the local store.
+			store := identity.NewTrustStore(trustDir())
+			if !signer.Fingerprint.Equal(target) {
+				trusted, err := store.IsTrusted(signer.Fingerprint)
+				if err != nil {
+					return err
+				}
+				if !trusted {
+					return fmt.Errorf("%w: revocation signer %s is not trusted", pverrors.ErrUntrustedSigner, signer.Fingerprint.Grouped())
+				}
+			}
 			env, err := identity.SignRevocation(priv, target, reason, nil)
 			if err != nil {
 				return err
@@ -367,6 +387,7 @@ func newTrustPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			env, err := identity.PublishTrustList(priv, trust, nil)
 			if err != nil {
@@ -391,7 +412,7 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 		Short: "Recover your trust store from the repository copy",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := setup(f, cmd.ErrOrStderr())
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -417,6 +438,7 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			r, err := repo.GetObject(ctx, identity.TrustListKey(owner.Fingerprint))
 			if err != nil {
 				return fmt.Errorf("read published trust list for %s: %w (publish it first with `trust publish`)",
@@ -435,7 +457,11 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "recovered trust list for %s: %d trusted, %d revoked (published %s)\n",
 				summary.Owner.Grouped(), summary.Trusted, summary.Revoked,
 				summary.ExportedAt.Format("2006-01-02T15:04:05Z"))
-			fmt.Fprintf(cmd.OutOrStdout(), "re-confirm revocations with your team if this looks old, then run verify to re-learn heads\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "run verify to re-learn heads\n")
+			if warning := identity.ExportAgeWarning(summary.ExportedAt, nil); warning != "" {
+				logger.WarnContext(ctx, "recovered trust list is stale", slog.String("warning", warning))
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning)
+			}
 			return nil
 		},
 	}

@@ -266,11 +266,12 @@ func TestPruneAfterJobSkipsWhenLocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	master, _, _, err := openMaster(ctx, &f, cfg, repo, trust, repoCfg.RepositoryID)
+	master, priv, _, err := openMaster(ctx, &f, cfg, repo, trust, repoCfg.RepositoryID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer master.Zero()
+	defer priv.Zero()
 	local := repository.NewLocal(repoPath)
 	acquired, err := repository.TryAcquireGCLock(ctx, local, repository.OperationECCRebuild, "other", repository.DefaultHost(), repository.DefaultLockTTL, time.Now)
 	if err != nil || !acquired {

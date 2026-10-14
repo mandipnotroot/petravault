@@ -107,6 +107,12 @@ func (t *TrustStore) List() ([]Identity, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Bind the filename to the recomputed fingerprint, like the
+		// keystore loader: a misnamed-but-valid file must not list under
+		// a name that IsTrusted would resolve differently.
+		if e.Name() != id.Fingerprint.String()+".json" {
+			return nil, fmt.Errorf("%w: trusted key file %q does not match its fingerprint", pverrors.ErrIntegrity, e.Name())
+		}
 		out = append(out, *id)
 	}
 	slices.SortFunc(out, func(a, b Identity) int {
@@ -116,8 +122,8 @@ func (t *TrustStore) List() ([]Identity, error) {
 }
 
 // IsTrusted reports whether fp is trusted and not revoked. Existence is the
-// decision: trust entries are verified at Add time and revocations at
-// AddRevocation time.
+// decision: trust entries are verified at Add time, and callers verify
+// revocation signatures before AddRevocation time.
 func (t *TrustStore) IsTrusted(fp Fingerprint) (bool, error) {
 	if revoked, err := t.IsRevoked(fp); err != nil {
 		return false, err
@@ -163,9 +169,11 @@ func (t *TrustStore) TrustedPublic(fp Fingerprint) (*Identity, error) {
 	return ParsePublic(data)
 }
 
-// AddRevocation stores an already-verified revocation envelope for target.
-// The envelope payload must name target, or the store refuses it. Storing is
-// idempotent: any one valid revocation disqualifies the key.
+// AddRevocation stores a revocation envelope for target. The caller must
+// have verified the envelope signature against its own trust list before
+// storing: this method checks only that the payload names target, not who
+// signed it. Storing is idempotent: any one valid revocation disqualifies
+// the key.
 func (t *TrustStore) AddRevocation(target Fingerprint, envBytes []byte) error {
 	rev, err := decodeRevocationEnvelope(envBytes)
 	if err != nil {

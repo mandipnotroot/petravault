@@ -59,8 +59,11 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoCfg, _, err := repository.ReadConfig(cmd.Context(), repo, trusted)
+			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
 			if err != nil {
+				return err
+			}
+			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)
@@ -76,6 +79,7 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			repoCfg.ECC = params.Setting
 			if err := repoCfg.Validate(); err != nil {
 				return err
@@ -115,8 +119,11 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoCfg, _, err := repository.ReadConfig(cmd.Context(), repo, trusted)
+			repoCfg, configSigner, err := repository.ReadConfig(cmd.Context(), repo, trusted)
 			if err != nil {
+				return err
+			}
+			if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
 				return err
 			}
 			signer, err := resolveSigner(f, cfg)
@@ -132,6 +139,7 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			master, err := openGranterSlot(cmd.Context(), repo, trust, repoCfg.RepositoryID, priv)
 			if err != nil {
 				return err
@@ -151,8 +159,8 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 				return fmt.Errorf("%w: maintenance lock is held, refusing to rebuild", pverrors.ErrUsage)
 			}
 			stop := repository.StartHeartbeat(cmd.Context(), repo, repository.GCLockKey, repository.OperationECCRebuild, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
-			defer stop()
 			defer func() {
+				stop()
 				if err := repository.ReleaseGCLock(cmd.Context(), repo); err != nil {
 					logger.WarnContext(cmd.Context(), "release maintenance lock failed", slog.Any("error", err))
 				}

@@ -13,10 +13,13 @@ package restore
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,6 +118,16 @@ func Restore(ctx context.Context, repo repository.Repository, repoID string, dat
 			}
 		}
 	}
+	// Manifest entries map to OS paths after FromSlash: distinct entries
+	// must not collide there, or one would silently win under --overwrite.
+	seen := make(map[string]string, len(selected))
+	for _, f := range selected {
+		osPath := filepath.FromSlash(f.Path)
+		if prev, ok := seen[osPath]; ok {
+			return fmt.Errorf("%w: manifest paths %q and %q collide", pverrors.ErrIntegrity, prev, f.Path)
+		}
+		seen[osPath] = f.Path
+	}
 	// Create directories first so parents exist before files.
 	for _, f := range selected {
 		if f.Type != manifest.TypeDir {
@@ -125,25 +138,39 @@ func Restore(ctx context.Context, repo repository.Repository, repoID string, dat
 			return fmt.Errorf("create directory %s: %w", f.Path, err)
 		}
 	}
+	// Restore files before symlinks: a symlink created earlier in the same
+	// run must never redirect a file write, even though os.Root already
+	// confines everything to the destination.
 	restored := 0
-	for _, f := range selected {
-		if err := ctx.Err(); err != nil {
-			return err
+	for _, pass := range []string{manifest.TypeFile, manifest.TypeSymlink} {
+		for _, f := range selected {
+			if f.Type != pass {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			switch f.Type {
+			case manifest.TypeSymlink:
+				if err := restoreSymlink(root, f, opts.Overwrite); err != nil {
+					return err
+				}
+				restored++
+			case manifest.TypeFile:
+				if err := restoreFile(ctx, repo, repoID, dataKey, chunkIDKey, entries, root, f, maxChunk, mask, opts.Overwrite); err != nil {
+					return err
+				}
+				restored++
+			default:
+				return fmt.Errorf("%w: manifest holds invalid type %q for %q", pverrors.ErrIntegrity, f.Type, f.Path)
+			}
 		}
-		switch f.Type {
-		case manifest.TypeDir:
-			// Already created; mode and times are applied below.
-		case manifest.TypeSymlink:
-			if err := restoreSymlink(root, f, opts.Overwrite); err != nil {
-				return err
-			}
-			restored++
-		case manifest.TypeFile:
-			if err := restoreFile(ctx, repo, repoID, dataKey, chunkIDKey, entries, root, f, maxChunk, mask, opts.Overwrite); err != nil {
-				return err
-			}
-			restored++
-		default:
+	}
+	for _, f := range selected {
+		if f.Type == manifest.TypeDir {
+			continue
+		}
+		if f.Type != manifest.TypeFile && f.Type != manifest.TypeSymlink {
 			return fmt.Errorf("%w: manifest holds invalid type %q for %q", pverrors.ErrIntegrity, f.Type, f.Path)
 		}
 	}
@@ -217,6 +244,14 @@ func validateManifestPath(p string) error {
 	if p == "" || !filepath.IsLocal(filepath.FromSlash(p)) {
 		return fmt.Errorf("%w: unsafe manifest path %q", pverrors.ErrIntegrity, p)
 	}
+	// Reject non-canonical slash paths (a//b, a/./b, trailing slashes):
+	// they would collide after FromSlash with a distinct manifest entry.
+	if cleaned := path.Clean(p); cleaned != p {
+		return fmt.Errorf("%w: manifest path %q is not canonical", pverrors.ErrIntegrity, p)
+	}
+	if p == "." {
+		return fmt.Errorf("%w: unsafe manifest path %q", pverrors.ErrIntegrity, p)
+	}
 	return nil
 }
 
@@ -252,7 +287,9 @@ func restoreSymlink(root *os.Root, f manifest.File, overwrite bool) error {
 		if !overwrite {
 			return fmt.Errorf("refusing to overwrite existing %s (use --overwrite)", f.Path)
 		}
-		if err := root.RemoveAll(osPath); err != nil {
+		// Remove, not RemoveAll: replacing a non-empty directory with a
+		// symlink must never wipe a tree, crafted or otherwise.
+		if err := root.Remove(osPath); err != nil {
 			return fmt.Errorf("remove existing %s: %w", f.Path, err)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -271,13 +308,10 @@ func restoreFile(ctx context.Context, repo repository.Repository, repoID string,
 	if err := ensureParent(root, osPath); err != nil {
 		return err
 	}
-	plaintext, err := readFileChunks(ctx, repo, repoID, dataKey, chunkIDKey, entries, f, maxChunk)
-	if err != nil {
-		return err
+	if f.Size < 0 {
+		return fmt.Errorf("%w: file %q has negative size %d", pverrors.ErrIntegrity, f.Path, f.Size)
 	}
-	if int64(len(plaintext)) != f.Size {
-		return fmt.Errorf("%w: file %q size %d disagrees with its chunks %d", pverrors.ErrIntegrity, f.Path, f.Size, len(plaintext))
-	}
+	// Refuse before fetching anything: no wasted decryption or disk I/O.
 	if _, err := root.Lstat(osPath); err == nil {
 		if !overwrite {
 			return fmt.Errorf("refusing to overwrite existing %s (use --overwrite)", f.Path)
@@ -285,16 +319,51 @@ func restoreFile(ctx context.Context, repo repository.Repository, repoID string,
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("stat %s: %w", f.Path, err)
 	}
-	tmp := osPath + ".petravault-tmp"
-	// Remove a stale temp file from an interrupted restore before writing.
-	_ = root.Remove(tmp)
+	// Unique temp name in the same directory: never delete a file the run
+	// did not create, so --include runs cannot clobber out-of-scope
+	// *.petravault-tmp files, and a manifest holding both a path and its
+	// temp sibling cannot collide.
+	tmp, err := tempName(osPath)
+	if err != nil {
+		return err
+	}
 	w, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create temp for %s: %w", f.Path, err)
 	}
 	writeErr := func() error {
-		if _, err := w.Write(plaintext); err != nil {
-			return fmt.Errorf("write %s: %w", f.Path, err)
+		var total int64
+		for _, hexID := range f.Chunks {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			id, err := pack.ParseID(hexID)
+			if err != nil {
+				return fmt.Errorf("%w: file %q holds %w", pverrors.ErrIntegrity, f.Path, err)
+			}
+			loc, ok := entries[id]
+			if !ok {
+				return fmt.Errorf("%w: file %q references missing chunk %s", pverrors.ErrIntegrity, f.Path, hexID)
+			}
+			plaintext, err := pack.ReadChunk(ctx, repo, repoID, dataKey, chunkIDKey, loc, maxChunk)
+			if err != nil {
+				return fmt.Errorf("restore %s: %w", f.Path, err)
+			}
+			// Chunks must sum to the manifest size exactly; stop early
+			// rather than filling disk from a lying chunk list.
+			if total+int64(len(plaintext)) > f.Size {
+				clear(plaintext)
+				return fmt.Errorf("%w: file %q chunks exceed its size %d", pverrors.ErrIntegrity, f.Path, f.Size)
+			}
+			total += int64(len(plaintext))
+			if _, err := w.Write(plaintext); err != nil {
+				clear(plaintext)
+				return fmt.Errorf("write %s: %w", f.Path, err)
+			}
+			clear(plaintext)
+		}
+		if total != f.Size {
+			return fmt.Errorf("%w: file %q size %d disagrees with its chunks %d", pverrors.ErrIntegrity, f.Path, f.Size, total)
 		}
 		if err := w.Sync(); err != nil {
 			return fmt.Errorf("sync %s: %w", f.Path, err)
@@ -331,33 +400,16 @@ func restoreFile(ctx context.Context, repo repository.Repository, repoID string,
 	return nil
 }
 
-// readFileChunks fetches every chunk, authenticating (AEAD), bounding
-// decompression, and verifying the keyed BLAKE3 ID before returning. No
-// file bytes are written until all chunks pass.
-func readFileChunks(ctx context.Context, repo repository.Repository, repoID string, dataKey, chunkIDKey crypto.SecretKey, entries map[[32]byte]pack.Entry, f manifest.File, maxChunk int) ([]byte, error) {
-	if len(f.Chunks) == 0 {
-		return nil, nil
+// tempName returns a unique temp sibling of osPath in the same directory
+// so the final rename stays atomic. The random suffix keeps concurrent or
+// interrupted restores from colliding and means the run never removes a
+// file it did not create.
+func tempName(osPath string) (string, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate temp name: %w", err)
 	}
-	out := make([]byte, 0)
-	for _, hexID := range f.Chunks {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		id, err := pack.ParseID(hexID)
-		if err != nil {
-			return nil, fmt.Errorf("%w: file %q holds %w", pverrors.ErrIntegrity, f.Path, err)
-		}
-		loc, ok := entries[id]
-		if !ok {
-			return nil, fmt.Errorf("%w: file %q references missing chunk %s", pverrors.ErrIntegrity, f.Path, hexID)
-		}
-		plaintext, err := pack.ReadChunk(ctx, repo, repoID, dataKey, chunkIDKey, loc, maxChunk)
-		if err != nil {
-			return nil, fmt.Errorf("restore %s: %w: %w", f.Path, err, pverrors.ErrIntegrity)
-		}
-		out = append(out, plaintext...)
-	}
-	return out, nil
+	return osPath + ".petravault-tmp-" + hex.EncodeToString(raw[:]), nil
 }
 
 func ensureParent(root *os.Root, osPath string) error {

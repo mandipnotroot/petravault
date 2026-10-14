@@ -110,6 +110,11 @@ func newRecoveryImportCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "imported recovery bundle for %s: identity verified, %d trusted, %d revoked\n",
 				summary.Owner.Grouped(), summary.Trusted, summary.Revoked)
 			fmt.Fprintf(cmd.OutOrStdout(), "run verify to re-check the repository before trusting it\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "this bundle restores past trust decisions, never new ones\n")
+			if warning := identity.ExportAgeWarning(summary.ExportedAt, nil); warning != "" {
+				logger.WarnContext(cmd.Context(), "recovery bundle is stale", slog.String("warning", warning))
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning)
+			}
 			return nil
 		},
 	}

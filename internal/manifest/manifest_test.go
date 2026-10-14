@@ -423,6 +423,56 @@ func TestOpenRejectsSuiteDowngrade(t *testing.T) {
 	}
 }
 
+func TestOpenMapsStructuralDefectToIntegrity(t *testing.T) {
+	t.Parallel()
+
+	priv, pub := mustMLDSA(t)
+	repo, err := repository.Init(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	dataKey := mustMaster(t)
+	defer dataKey.Zero()
+	// Duplicate paths pass ordering but fail validation: after a verified
+	// signature that means tampering, so Open must report integrity
+	// (exit code 4), while Commit of the same input stays a usage error.
+	files := []manifest.File{
+		{Path: "a", Type: manifest.TypeDir},
+		{Path: "a", Type: manifest.TypeDir},
+	}
+	m := manifest.Manifest{
+		RepositoryID:      "r",
+		SourceID:          "s",
+		CreatedAt:         time.Now().UTC(),
+		Identity:          "fp",
+		CryptoSuite:       crypto.SuiteID,
+		ChunkingAlgorithm: crypto.ChunkingID,
+		Files:             files,
+	}
+	payload, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := manifest.Sign(testSigner{priv}, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hexID := manifest.FormatSnapshotID(manifest.SnapshotID(payload))
+	sealed, err := dataKey.Seal(env, crypto.AssociatedData("r", manifest.ObjectSnapshot, hexID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.PutObject(ctx, manifest.SnapshotPrefix+hexID, bytes.NewReader(sealed)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Open(ctx, repo, "r", dataKey, hexID, pub); err == nil {
+		t.Fatal("Open accepted a structurally defective manifest")
+	} else if !errors.Is(err, pverrors.ErrIntegrity) {
+		t.Fatalf("defect error = %v, want integrity failure", err)
+	}
+}
+
 func TestCommitRejectsUnsortedFiles(t *testing.T) {
 	t.Parallel()
 

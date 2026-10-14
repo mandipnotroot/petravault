@@ -42,7 +42,9 @@ requested span. Addressed as a filesystem path; `Init` is idempotent.
 
 Addressed as `s3:<bucket>[/<prefix>]` (`ParseS3Address` enforces DNS bucket
 rules and local prefixes). Buckets are never auto-created. `PUT` is atomic;
-packs (~16 MiB) use a single `PUT`, no multipart. `PutObjectIfAbsent` uses
+packs (~16 MiB) use a single `PUT`, no multipart, and objects are buffered
+fully in memory during upload and download, so keep the default pack size
+for S3 repositories. `PutObjectIfAbsent` uses
 `If-None-Match: *` (412/409 means a lost race). `GetRange` uses inclusive
 `bytes=start-end` so restore fetches one chunk without the whole pack.
 `List` paginates and returns sorted keys.

@@ -64,9 +64,12 @@ func openRosterData(ctx context.Context, repo repository.Repository, trust *iden
 	if err != nil {
 		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, configSigner, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
 		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, withTrustHint(err, repoPath, false)
+	}
+	if err := requireTrustedConfigSigner(trust, configSigner); err != nil {
+		return repository.Config{}, crypto.SecretKey{}, crypto.SecretKey{}, err
 	}
 	master, err := openGranterSlot(ctx, repo, trust, repoCfg.RepositoryID, priv)
 	if err != nil {
@@ -107,6 +110,7 @@ func newMembersPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {
@@ -162,6 +166,7 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer priv.Zero()
 			trust := identity.NewTrustStore(trustDir())
 			repoCfg, master, dataKey, err := openRosterData(ctx, repo, trust, priv, repoPath)
 			if err != nil {
@@ -198,7 +203,11 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "adopted %d new members from %s (published %s)\n",
 				summary.Adopted, summary.Publisher.Grouped(),
 				summary.ExportedAt.Format("2006-01-02T15:04:05Z"))
-			fmt.Fprintf(cmd.OutOrStdout(), "re-publish duty stays with the granter; re-confirm revocations with your team if this looks old\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "re-publish duty stays with the granter\n")
+			if warning := identity.ExportAgeWarning(summary.ExportedAt, nil); warning != "" {
+				logger.WarnContext(ctx, "member roster is stale", slog.String("warning", warning))
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", warning)
+			}
 			return nil
 		},
 	}

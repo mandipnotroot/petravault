@@ -112,6 +112,17 @@ func TestDeriveKEKRejectsBadInputs(t *testing.T) {
 	}
 }
 
+func TestValidateMemoryCap(t *testing.T) {
+	t.Parallel()
+
+	if err := (crypto.Params{Time: 1, Memory: 256 << 10, Threads: 1}).Validate(); err != nil {
+		t.Fatalf("Validate rejected 256 MiB, want acceptance: %v", err)
+	}
+	if err := (crypto.Params{Time: 1, Memory: (256 << 10) + 1, Threads: 1}).Validate(); err == nil {
+		t.Fatal("Validate accepted memory above 256 MiB, want rejection")
+	}
+}
+
 func TestRandomSalt(t *testing.T) {
 	t.Parallel()
 

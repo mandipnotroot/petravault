@@ -54,7 +54,9 @@ func openRepo(ctx context.Context, cfg config.Config, repoPath string) (reposito
 // openVerifiedRepo opens the repository and verifies its signed
 // config against the client-local trust list. It returns the repository,
 // its verified config, and the trust material callers need to open key
-// slots and snapshots.
+// slots and snapshots. A config signed by a revoked or removed key is
+// refused outright (DESIGN.md §5): a surviving trusted member re-signs it
+// with `ecc set`.
 func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
 	repo, err := openRepo(ctx, cfg, repoPath)
 	if err != nil {
@@ -65,11 +67,33 @@ func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, signer, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
+	if err := requireTrustedConfigSigner(trust, signer); err != nil {
+		return nil, repository.Config{}, nil, nil, err
+	}
 	return repo, repoCfg, trust, trusted, nil
+}
+
+// requireTrustedConfigSigner refuses a repository config whose signer is
+// revoked or removed from the client-local trust list. Revocation
+// disqualifies new trust unconditionally; history stays readable only after
+// a surviving member re-signs the config.
+func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error {
+	fp, err := identity.ParseFingerprint(signer)
+	if err != nil {
+		return err
+	}
+	ok, err := trust.IsTrusted(fp)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: repository config signer %s is revoked or removed (have a surviving member re-sign it with `ecc set`)", pverrors.ErrUntrustedSigner, fp.Grouped())
+	}
+	return nil
 }
 
 // openMaster unlocks the signer's private identity and opens its key slot,
