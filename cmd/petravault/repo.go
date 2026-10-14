@@ -5,10 +5,10 @@ package main
 
 import (
 	"cmp"
-	"log/slog"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"

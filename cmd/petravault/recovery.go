@@ -110,7 +110,7 @@ func newRecoveryImportCmd(f *flags) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "imported recovery bundle for %s: identity verified, %d trusted, %d revoked\n",
 				summary.Owner.Grouped(), summary.Trusted, summary.Revoked)
 			fmt.Fprintf(cmd.OutOrStdout(), "run verify to re-check the repository before trusting it\n")
-		fmt.Fprintf(cmd.OutOrStdout(), "re-confirm revocations with the team if this bundle is old: it restores past trust decisions, never new ones\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "re-confirm revocations with the team if this bundle is old: it restores past trust decisions, never new ones\n")
 			return nil
 		},
 	}
