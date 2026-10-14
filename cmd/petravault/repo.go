@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -96,6 +97,18 @@ func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error
 	return nil
 }
 
+// unlockPrivate prompts for the keystore password and loads the private
+// identity for fp. The password buffer is cleared before return; the
+// caller owns the returned identity and must Zero it when finished.
+func unlockPrivate(ctx context.Context, fp identity.Fingerprint, prompt string) (*identity.PrivateIdentity, error) {
+	password, err := identity.ReadPassword(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(password)
+	return identity.NewStore(keystoreDir()).LoadPrivate(fp, password)
+}
+
 // openMaster unlocks the signer's private identity and opens its key slot,
 // proving the signer holds read access. The granter must be in the client's
 // own trust list; a slot signed by anyone else is refused.
@@ -104,12 +117,7 @@ func openMaster(ctx context.Context, f *flags, cfg config.Config, repo repositor
 	if err != nil {
 		return crypto.SecretKey{}, nil, nil, err
 	}
-	password, err := identity.ReadPassword(ctx, "Enter password for identity: ")
-	if err != nil {
-		return crypto.SecretKey{}, nil, nil, err
-	}
-	defer clear(password)
-	priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+	priv, err := unlockPrivate(ctx, signer.Fingerprint, "Enter password for identity: ")
 	if err != nil {
 		return crypto.SecretKey{}, nil, nil, err
 	}
@@ -118,6 +126,30 @@ func openMaster(ctx context.Context, f *flags, cfg config.Config, repo repositor
 		return crypto.SecretKey{}, nil, nil, err
 	}
 	return master, priv, signer, nil
+}
+
+// withGCLock acquires the maintenance lock for operation, starts its
+// heartbeat, runs fn, then stops the heartbeat and releases the lock.
+// Contention fails closed with refuseMsg (usage error); release failures
+// are logged, never silently ignored. Callers that must wait out backups
+// (prune) do so inside fn to keep the documented lock ordering
+// (DESIGN.md §10.2); callers that must not wait (ecc rebuild) omit it.
+func withGCLock(ctx context.Context, repo repository.Repository, operation, holder, refuseMsg string, logger *slog.Logger, fn func() error) error {
+	acquired, err := repository.TryAcquireGCLock(ctx, repo, operation, holder, repository.DefaultHost(), repository.DefaultLockTTL, time.Now)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return fmt.Errorf("%w: %s", pverrors.ErrUsage, refuseMsg)
+	}
+	stop := repository.StartHeartbeat(ctx, repo, repository.GCLockKey, operation, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
+	defer func() {
+		stop()
+		if err := repository.ReleaseGCLock(ctx, repo); err != nil {
+			logger.WarnContext(ctx, "release maintenance lock failed", slog.Any("error", err))
+		}
+	}()
+	return fn()
 }
 
 // trustedLookup returns a manifest signer lookup over the client-local

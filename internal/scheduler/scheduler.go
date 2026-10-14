@@ -168,11 +168,6 @@ func (j Job) Validate() error {
 	if j.Attempts < 0 || j.Attempts > MaxAttempts {
 		return fmt.Errorf("%w: job %q has attempts %d, want 0 (default) through %d", pverrors.ErrUsage, j.Name, j.Attempts, MaxAttempts)
 	}
-	if j.Attempts == 0 {
-		// Default applies; nothing to check.
-	} else if j.Attempts < 1 {
-		return fmt.Errorf("%w: job %q has attempts %d, want at least 1", pverrors.ErrUsage, j.Name, j.Attempts)
-	}
 	if strings.TrimSpace(j.ECC) != "" {
 		if _, err := erasure.Parse(j.ECC); err != nil {
 			return fmt.Errorf("job %q: %w", j.Name, err)
@@ -387,37 +382,31 @@ func StateDir(stateDir string) string {
 	return filepath.Join(stateDir, "petravault", "schedule")
 }
 
-// JobPath returns the definition file for name after validating it.
-func JobPath(dir, name string) (string, error) {
+// pathFor validates name and joins dir with name+suffix. emptyMsg names
+// the directory kind so callers keep their exact usage errors.
+func pathFor(dir, name, suffix, emptyMsg string) (string, error) {
 	if err := ValidateName(name); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("%w: schedule directory is empty", pverrors.ErrUsage)
+		return "", fmt.Errorf("%w: %s is empty", pverrors.ErrUsage, emptyMsg)
 	}
-	return filepath.Join(dir, name+".json"), nil
+	return filepath.Join(dir, name+suffix), nil
+}
+
+// JobPath returns the definition file for name after validating it.
+func JobPath(dir, name string) (string, error) {
+	return pathFor(dir, name, ".json", "schedule directory")
 }
 
 // StatePath returns the state file for name after validating it.
 func StatePath(dir, name string) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("%w: schedule state directory is empty", pverrors.ErrUsage)
-	}
-	return filepath.Join(dir, name+".state.json"), nil
+	return pathFor(dir, name, ".state.json", "schedule state directory")
 }
 
 // LockPath returns the overlap lock file for name.
 func LockPath(dir, name string) (string, error) {
-	if err := ValidateName(name); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(dir) == "" {
-		return "", fmt.Errorf("%w: schedule state directory is empty", pverrors.ErrUsage)
-	}
-	return filepath.Join(dir, name+".lock"), nil
+	return pathFor(dir, name, ".lock", "schedule state directory")
 }
 
 // LoadJob reads and validates one job file. Group/world-readable files and

@@ -434,9 +434,6 @@ func RefreshGCLock(ctx context.Context, repo Repository, operation, holder, host
 	if err := existing.Validate(); err != nil {
 		return err
 	}
-	if err := existing.Validate(); err != nil {
-		return err
-	}
 	raw, err := json.Marshal(existing)
 	if err != nil {
 		return fmt.Errorf("marshal gc lock: %w", err)

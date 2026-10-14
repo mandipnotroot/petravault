@@ -12,8 +12,6 @@ import (
 	"petravault/internal/repository"
 
 	"github.com/spf13/cobra"
-
-	pverrors "petravault/internal/errors"
 )
 
 func newPruneCmd(f *flags) *cobra.Command {
@@ -72,28 +70,18 @@ func newPruneCmd(f *flags) *cobra.Command {
 				return nil
 			}
 			holder := "prune-" + repository.DefaultHost()
-			acquired, err := repository.TryAcquireGCLock(cmd.Context(), repo, repository.OperationPrune, holder, repository.DefaultHost(), repository.DefaultLockTTL, time.Now)
-			if err != nil {
-				return err
-			}
-			if !acquired {
-				return fmt.Errorf("%w: maintenance lock is held, refusing to prune", pverrors.ErrUsage)
-			}
-			stop := repository.StartHeartbeat(cmd.Context(), repo, repository.GCLockKey, repository.OperationPrune, holder, repository.DefaultHost(), repository.DefaultHeartbeatInterval, time.Now, logger)
-			defer func() {
-				stop()
-				if err := repository.ReleaseGCLock(cmd.Context(), repo); err != nil {
-					logger.WarnContext(cmd.Context(), "release maintenance lock failed", slog.Any("error", err))
+			var report prune.Report
+			if err := withGCLock(cmd.Context(), repo, repository.OperationPrune, holder, "maintenance lock is held, refusing to prune", logger, func() error {
+				if err := repository.WaitForBackups(cmd.Context(), repo, repository.DefaultLockTTL, repository.DefaultPruneWaitTimeout, time.Now); err != nil {
+					return err
 				}
-			}()
-			if err := repository.WaitForBackups(cmd.Context(), repo, repository.DefaultLockTTL, repository.DefaultPruneWaitTimeout, time.Now); err != nil {
+				var err error
+				report, err = prune.Prune(cmd.Context(), repo, repoCfg, sub.Data, sub.ChunkID, trustedLookup(trust, trusted), prune.Options{
+					Retention: retention,
+					Logger:    logger,
+				})
 				return err
-			}
-			report, err := prune.Prune(cmd.Context(), repo, repoCfg, sub.Data, sub.ChunkID, trustedLookup(trust, trusted), prune.Options{
-				Retention: retention,
-				Logger:    logger,
-			})
-			if err != nil {
+			}); err != nil {
 				return err
 			}
 			printPruneReport(cmd, report, false)

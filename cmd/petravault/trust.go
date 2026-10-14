@@ -187,12 +187,7 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 	if !granted {
 		return fmt.Errorf("%w: granter %s is not trusted", pverrors.ErrUntrustedSigner, granter.Fingerprint.Grouped())
 	}
-	password, err := identity.ReadPassword(ctx, "Enter password for granting identity: ")
-	if err != nil {
-		return err
-	}
-	defer clear(password)
-	granterPriv, err := identity.NewStore(keystoreDir()).LoadPrivate(granter.Fingerprint, password)
+	granterPriv, err := unlockPrivate(ctx, granter.Fingerprint, "Enter password for granting identity: ")
 	if err != nil {
 		return err
 	}
@@ -311,12 +306,7 @@ func newTrustRevokeCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(cmd.Context(), "Enter password for signing identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(cmd.Context(), signer.Fingerprint, "Enter password for signing identity: ")
 			if err != nil {
 				return err
 			}
@@ -378,12 +368,7 @@ func newTrustPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(ctx, "Enter password for publishing identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			priv, err := unlockPrivate(ctx, signer.Fingerprint, "Enter password for publishing identity: ")
 			if err != nil {
 				return err
 			}
@@ -429,12 +414,7 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := identity.ReadPassword(ctx, "Enter password for recovering identity: ")
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(owner.Fingerprint, password)
+			priv, err := unlockPrivate(ctx, owner.Fingerprint, "Enter password for recovering identity: ")
 			if err != nil {
 				return err
 			}
