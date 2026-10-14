@@ -28,6 +28,11 @@ func DefaultParams() Params {
 	return Params{Time: 3, Memory: 65536, Threads: 4}
 }
 
+// maxUnlockMemoryKiB caps Unlock-time allocation from hostile keystore
+// files at 256 MiB: 4x headroom over the 64 MiB default this code seals
+// with, while a planted file can no longer force a 1 GiB derivation.
+const maxUnlockMemoryKiB = 256 << 10
+
 // Validate fails closed on missing or unsafe parameters. The upper bounds
 // also guard Unlock against a hostile keystore file claiming absurd costs as
 // a memory/CPU-exhaustion vector.
@@ -35,8 +40,8 @@ func (p Params) Validate() error {
 	if p.Time < 1 || p.Time > 16 {
 		return fmt.Errorf("invalid argon2 time %d: want 1..16", p.Time)
 	}
-	if p.Memory < 1024 || p.Memory > 1<<20 {
-		return fmt.Errorf("invalid argon2 memory %d KiB: want 1024..1048576", p.Memory)
+	if p.Memory < 1024 || p.Memory > maxUnlockMemoryKiB {
+		return fmt.Errorf("invalid argon2 memory %d KiB: want 1024..%d", p.Memory, maxUnlockMemoryKiB)
 	}
 	if p.Threads < 1 || p.Threads > 16 {
 		return fmt.Errorf("invalid argon2 threads %d: want 1..16", p.Threads)
