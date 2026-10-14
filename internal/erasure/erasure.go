@@ -159,6 +159,11 @@ func atoi(s string) (int, error) {
 	if s == "" {
 		return 0, errors.New("empty number")
 	}
+	// Percentages are small (0.5%..100%); a long digit run is a typo, not
+	// a setting, and bounds the n*10 accumulation below.
+	if len(s) > 6 {
+		return 0, fmt.Errorf("invalid number %q: too many digits", s)
+	}
 	n := 0
 	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
