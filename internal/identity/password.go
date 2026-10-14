@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"golang.org/x/term"
 
@@ -21,6 +22,16 @@ import (
 
 // maxPasswordFileSize bounds password-file reads.
 const maxPasswordFileSize = 65536
+
+// passwordCommandTimeout bounds password helpers so a hanging helper cannot
+// block unlock forever (DESIGN.md §11.2). A variable only so tests can
+// shorten it; production always uses the default.
+var passwordCommandTimeout = 60 * time.Second
+
+// passwordKillGrace bounds the pipe wait after a helper is killed: orphaned
+// grandchildren can hold stdout open past the kill, and without this the
+// read would block until they exit on their own.
+const passwordKillGrace = 5 * time.Second
 
 // ReadPassword returns the keystore password, in order of preference
 // (DESIGN.md §11.2): PETRAVAULT_PASSWORD_COMMAND, PETRAVAULT_PASSWORD_FILE
@@ -64,9 +75,12 @@ func ReadPasswordConfirm(ctx context.Context, prompt, confirmPrompt string) ([]b
 }
 
 func passwordFromCommand(ctx context.Context, cmdStr string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, passwordCommandTimeout)
+	defer cancel()
 	//nolint:gosec // the helper command comes from the operator's own
 	// PETRAVAULT_PASSWORD_COMMAND (DESIGN.md §11.2), not from untrusted input.
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+	cmd.WaitDelay = passwordKillGrace
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("run password command: %w", err)

@@ -561,7 +561,7 @@ petravault schedule add --name daily-documents --source ~/Documents \
 
 Scheduled jobs cannot prompt for a password. The keystore (§4.4) is unlocked using, in order of preference:
 
-1. `PETRAVAULT_PASSWORD_COMMAND`: a command that prints the password (works with `secret-tool`, `pass`, cloud secret managers, or a keyring).
+1. `PETRAVAULT_PASSWORD_COMMAND`: a command that prints the password (works with `secret-tool`, `pass`, cloud secret managers, or a keyring). Helpers run under a 60s timeout so a hanging helper cannot block unlock forever. The daemon environment is fully trusted input: anyone who controls it already runs code as the backup user, so keep unit files and `EnvironmentFile`s mode `0600` and never inject secrets through container or orchestrator environment.
 2. `PETRAVAULT_PASSWORD_FILE`: a file that must be mode `0600`, refused otherwise, and is opened without following symlinks on Unix (`O_NOFOLLOW`).
 3. Interactive prompt (manual runs only).
 
