@@ -219,7 +219,7 @@ func (l *Local) List(_ context.Context, prefix string) ([]string, error) {
 // input when read back from storage, so anything that could escape the root
 // is rejected (filepath.IsLocal).
 func (l *Local) resolve(key string) (string, error) {
-	if key == "" || !filepath.IsLocal(key) {
+	if key == "" || key == "." || !filepath.IsLocal(key) {
 		return "", fmt.Errorf("invalid object key %q", key)
 	}
 	return filepath.Join(l.root, filepath.FromSlash(key)), nil

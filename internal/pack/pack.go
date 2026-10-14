@@ -148,6 +148,7 @@ func (w *Writer) Add(id [32]byte, plaintext []byte) error {
 		return err
 	}
 	sealed, err := w.dataKey.Seal(compressed, crypto.AssociatedData(w.repoID, ObjectChunk, FormatID(id)))
+	clear(compressed)
 	if err != nil {
 		return fmt.Errorf("seal chunk %s: %w", FormatID(id), err)
 	}
