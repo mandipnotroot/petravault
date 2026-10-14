@@ -56,18 +56,17 @@ jobs:
     permissions:
       contents: read
     services:
-      minio:
-        image: minio/minio:latest
+      # MinIO deleted minio/minio from Docker Hub in 2025 and archived its
+      # repository in 2026, so the S3 contract runs against LocalStack
+      # instead. The tag is pinned deliberately; bump it via reviewed PR.
+      # LocalStack supports the conditional writes the lock protocol needs
+      # (If-None-Match) as well as ranged reads and pagination.
+      s3:
+        image: localstack/localstack:2026.10.0
         ports:
-          - 9000:9000
+          - 4566:4566
         env:
-          MINIO_ROOT_USER: petravault-test
-          MINIO_ROOT_PASSWORD: petravault-test-password
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          SERVICES: s3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -76,9 +75,19 @@ jobs:
           cache: true
       - run: go mod verify
       - run: go vet ./...
-      - name: S3 contract against local MinIO
+      - name: Wait for S3
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4566/_localstack/health | grep -q '"s3"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "S3 test server did not become ready" >&2
+          exit 1
+      - name: S3 contract against LocalStack
         env:
-          PETRAVAULT_TEST_S3_ENDPOINT: http://localhost:9000
+          PETRAVAULT_TEST_S3_ENDPOINT: http://localhost:4566
           PETRAVAULT_S3_ALLOW_HTTP: "1"
           PETRAVAULT_TEST_S3_BUCKET: petravault-test
           AWS_ACCESS_KEY_ID: petravault-test
