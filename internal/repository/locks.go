@@ -417,6 +417,9 @@ func RefreshGCLock(ctx context.Context, repo Repository, operation, holder, host
 	if err != nil {
 		return err
 	}
+	// Host is recorded at acquire time and never overwritten by a
+	// refresh; it stays a parameter so heartbeats keep their shape.
+	_ = host
 	if strings.TrimSpace(holder) != "" && existing.Holder != holder {
 		return fmt.Errorf("%w: gc lock held by %q, not %q", pverrors.ErrUsage, existing.Holder, holder)
 	}
