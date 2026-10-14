@@ -7,8 +7,8 @@
 # -trimpath, pinned toolchain from go.mod, version from the tag), a
 # SHA256SUMS checksum file, and a CycloneDX SBOM, then opens a *draft*
 # GitHub release with those assets. A maintainer attaches a detached GPG
-# signature over SHA256SUMS (or the sign step below does it when a
-# GPG_PRIVATE_KEY secret is configured) before publishing.
+# signature over SHA256SUMS (SHA256SUMS.asc) to the draft before
+# publishing it.
 name: release
 on:
   push:
@@ -47,16 +47,6 @@ jobs:
           cat dist/SHA256SUMS
           make sbom
           mv bom.json dist/petravault-"${GITHUB_REF_NAME}".bom.json
-      - name: Detached signature over checksums (maintainer key)
-        # Skipped unless the repository configures a GPG_PRIVATE_KEY secret;
-        # otherwise a maintainer signs dist/SHA256SUMS offline and attaches
-        # SHA256SUMS.asc to the draft release before publishing.
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          gpg --batch --yes --armor --detach-sign -o dist/SHA256SUMS.asc dist/SHA256SUMS
       - name: Open draft release with artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
