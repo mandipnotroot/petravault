@@ -21,6 +21,7 @@ import (
 	"petravault/internal/identity"
 	"petravault/internal/manifest"
 	"petravault/internal/pack"
+	"petravault/internal/recovery"
 	"petravault/internal/repository"
 	"petravault/internal/restore"
 	"petravault/internal/scheduler"
@@ -946,6 +947,213 @@ func TestAttackModifyScheduleJob(t *testing.T) {
 	}
 	if _, err := scheduler.LoadJob(path); err == nil {
 		t.Fatal("loaded a job with an invalid frequency, want refusal")
+	}
+}
+
+// TestAttackTrustListTamperedOrForged covers DESIGN.md §5.2: a hostile
+// repository can withhold or roll back a published trust list but can
+// neither read nor alter it. Tampering the sealed copy must fail recovery,
+// and a revocation smuggled inside an otherwise valid list but signed by an
+// unknown key must be rejected rather than stored.
+func TestAttackTrustListTamperedOrForged(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t)
+	bob, _ := createMember(t, fx, "bob", "bob-password-trustlist-attack")
+	if err := fx.trust.Add(bob); err != nil {
+		t.Fatal(err)
+	}
+	env, err := identity.PublishTrustList(fx.alicePriv, fx.trust, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := identity.TrustListKey(fx.alice.Fingerprint)
+	if err := fx.repo.PutObject(t.Context(), key, bytes.NewReader(env)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Control: the published copy recovers.
+	raw := readObject(t, fx, key)
+	fresh := identity.NewTrustStore(filepath.Join(t.TempDir(), "fresh-trust"))
+	if _, err := identity.RecoverTrustList(raw, fx.alicePriv, fresh); err != nil {
+		t.Fatalf("control trust-list recovery failed: %v", err)
+	}
+
+	// Attacker flips a byte of the repository copy: the outer signature
+	// must fail.
+	overwriteObject(t, fx, key, flipByte(raw, len(raw)/2))
+	tampered := readObject(t, fx, key)
+	freshTampered := identity.NewTrustStore(filepath.Join(t.TempDir(), "fresh-tampered"))
+	_, err = identity.RecoverTrustList(tampered, fx.alicePriv, freshTampered)
+	requireIntegrity(t, err, "tampered trust-list snapshot")
+
+	// Attacker smuggles a forged revocation into an otherwise valid list.
+	// Mallory signs Bob's revocation but is never trusted; the publisher
+	// embeds it (AddRevocation checks the target, not the signer), signs
+	// the outer seal honestly, and recovery must still refuse it.
+	mallory, malloryPriv := createMember(t, fx, "mallory", "mallory-password-trustlist-attack")
+	_ = mallory
+	forged, err := identity.SignRevocation(malloryPriv, bob.Fingerprint, "forged", testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.trust.AddRevocation(bob.Fingerprint, forged); err != nil {
+		t.Fatal(err)
+	}
+	forgedEnv, err := identity.PublishTrustList(fx.alicePriv, fx.trust, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshForged := identity.NewTrustStore(filepath.Join(t.TempDir(), "fresh-forged"))
+	_, err = identity.RecoverTrustList(forgedEnv, fx.alicePriv, freshForged)
+	requireIntegrity(t, err, "trust list carrying a forged revocation")
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("forged revocation error = %v, want an untrusted-signer failure", err)
+	}
+}
+
+// TestAttackMemberRosterForgery covers DESIGN.md §5.2: the shared member
+// roster proposes trust but never grants access. A roster signed by an
+// untrusted publisher, a tampered roster, or a roster replayed into another
+// repository must all be rejected.
+func TestAttackMemberRosterForgery(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t)
+	bob, _ := createMember(t, fx, "bob", "bob-password-roster-attack")
+	if err := fx.trust.Add(bob); err != nil {
+		t.Fatal(err)
+	}
+	env, err := identity.PublishMembers(fx.alicePriv, fx.trust, fx.sub.Data, fx.repoID, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.repo.PutObject(t.Context(), identity.MembersKey, bytes.NewReader(env)); err != nil {
+		t.Fatal(err)
+	}
+
+	lookup := func(publisher string) ([]byte, error) {
+		fp, err := identity.ParseFingerprint(publisher)
+		if err != nil {
+			return nil, err
+		}
+		ok, err := fx.trust.IsTrusted(fp)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.Join(pverrors.ErrUntrustedSigner, errors.New("unknown roster publisher"))
+		}
+		id, err := fx.trust.TrustedPublic(fp)
+		if err != nil {
+			return nil, err
+		}
+		return id.SignPublic, nil
+	}
+
+	// Control: a new machine trusting only Alice adopts Bob.
+	bobTrustDir := filepath.Join(t.TempDir(), "bob-trust")
+	bobTrust := identity.NewTrustStore(bobTrustDir)
+	if err := bobTrust.Add(fx.alice); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := identity.AdoptMembers(readObject(t, fx, identity.MembersKey), fx.sub.Data, fx.repoID, bobTrust, lookup); err != nil {
+		t.Fatalf("control roster adoption failed: %v", err)
+	}
+
+	// Mallory publishes her own roster; Bob's client trusts only Alice.
+	mallory, malloryPriv := createMember(t, fx, "mallory", "mallory-password-roster-attack")
+	malloryTrust := identity.NewTrustStore(filepath.Join(t.TempDir(), "mallory-trust"))
+	if err := malloryTrust.Add(mallory); err != nil {
+		t.Fatal(err)
+	}
+	forged, err := identity.PublishMembers(malloryPriv, malloryTrust, fx.sub.Data, fx.repoID, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := identity.NewTrustStore(filepath.Join(t.TempDir(), "fresh-trust"))
+	if err := fresh.Add(fx.alice); err != nil {
+		t.Fatal(err)
+	}
+	_, err = identity.AdoptMembers(forged, fx.sub.Data, fx.repoID, fresh, lookup)
+	requireIntegrity(t, err, "roster from an untrusted publisher")
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("forged roster error = %v, want an untrusted-signer failure", err)
+	}
+
+	// Tampered roster bytes must fail.
+	rosterRaw := readObject(t, fx, identity.MembersKey)
+	tampered := flipByte(rosterRaw, len(rosterRaw)/2)
+	_, err = identity.AdoptMembers(tampered, fx.sub.Data, fx.repoID, fresh, lookup)
+	requireIntegrity(t, err, "tampered member roster")
+
+	// Roster replayed into another repository binds the wrong repository id.
+	otherRepoID, err := repository.GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = identity.AdoptMembers(readObject(t, fx, identity.MembersKey), fx.sub.Data, otherRepoID, fresh, lookup)
+	requireIntegrity(t, err, "roster replayed into another repository")
+}
+
+// TestAttackRecoveryBundleTamperedOrForged covers DESIGN.md §5.2: the
+// offline recovery bundle is password-encrypted and never lives in the
+// repository. Tampering, importing under the wrong identity, or smuggling a
+// revocation signed by an unknown key must all fail closed.
+func TestAttackRecoveryBundleTamperedOrForged(t *testing.T) {
+	t.Parallel()
+
+	fx := newFixture(t)
+	bob, _ := createMember(t, fx, "bob", "bob-password-bundle-attack")
+	if err := fx.trust.Add(bob); err != nil {
+		t.Fatal(err)
+	}
+	headsDir := t.TempDir()
+	bundlePassword := []byte("bundle-password-attack")
+	fileBytes, _, err := recovery.Export(fx.store, fx.trust, headsDir, fx.alice.Fingerprint, bundlePassword, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newEnv := func() (*identity.Store, *identity.TrustStore, string) {
+		root := t.TempDir()
+		return identity.NewStore(filepath.Join(root, "identities")),
+			identity.NewTrustStore(filepath.Join(root, "trust")),
+			filepath.Join(root, "heads")
+	}
+
+	// Tampered bundle bytes must fail authentication.
+	tampered := bytes.Clone(fileBytes)
+	tampered[len(tampered)/2] ^= 0x01
+	freshStore, freshTrust, freshHeads := newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, freshHeads, tampered, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
+	requireIntegrity(t, err, "tampered recovery bundle")
+
+	// A bundle for Alice must not import as Bob.
+	freshStore, freshTrust, freshHeads = newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, freshHeads, fileBytes, bundlePassword, []byte("test-password-attack"), bob.Fingerprint)
+	requireIntegrity(t, err, "recovery bundle imported under the wrong identity")
+
+	// A revocation signed by an unknown key smuggled into the bundle must
+	// be rejected even though the outer password box is intact.
+	mallory, malloryPriv := createMember(t, fx, "mallory", "mallory-password-bundle-attack")
+	_ = mallory
+	forged, err := identity.SignRevocation(malloryPriv, bob.Fingerprint, "forged", testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.trust.AddRevocation(bob.Fingerprint, forged); err != nil {
+		t.Fatal(err)
+	}
+	forgedBytes, _, err := recovery.Export(fx.store, fx.trust, headsDir, fx.alice.Fingerprint, bundlePassword, testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshStore, freshTrust, freshHeads = newEnv()
+	_, err = recovery.Import(freshStore, freshTrust, freshHeads, forgedBytes, bundlePassword, []byte("test-password-attack"), fx.alice.Fingerprint)
+	requireIntegrity(t, err, "recovery bundle carrying a forged revocation")
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
+		t.Fatalf("forged bundle revocation error = %v, want an untrusted-signer failure", err)
 	}
 }
 
