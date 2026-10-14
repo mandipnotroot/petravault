@@ -33,7 +33,7 @@ with 'latest' it verifies the newest trusted snapshot.`,
 			if err != nil {
 				return err
 			}
-			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath, logger)
 			if err != nil {
 				return err
 			}

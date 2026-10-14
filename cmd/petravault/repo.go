@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"log/slog"
 	"context"
 	"errors"
 	"fmt"
@@ -55,7 +56,7 @@ func openRepo(ctx context.Context, cfg config.Config, repoPath string) (reposito
 // config against the client-local trust list. It returns the repository,
 // its verified config, and the trust material callers need to open key
 // slots and snapshots.
-func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
+func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string, logger *slog.Logger) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
 	repo, err := openRepo(ctx, cfg, repoPath)
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
@@ -65,9 +66,21 @@ func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
-	repoCfg, _, err := repository.ReadConfig(ctx, repo, trusted)
+	repoCfg, signer, err := repository.ReadConfig(ctx, repo, trusted)
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
+	}
+	// Historical configs stay openable when signed by a since-revoked key,
+	// but a revoked or removed signer must never pass silently: warn
+	// loudly so operators notice a freshly re-signed config.
+	if fp, err := identity.ParseFingerprint(signer); err == nil {
+		if trustedNow, err := trust.IsTrusted(fp); err == nil && !trustedNow {
+			if logger == nil {
+				logger = slog.New(slog.DiscardHandler)
+			}
+			logger.WarnContext(ctx, "repository config signer is not currently trusted",
+				slog.String("signer", fp.Grouped()))
+		}
 	}
 	return repo, repoCfg, trust, trusted, nil
 }

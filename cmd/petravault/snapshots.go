@@ -43,7 +43,7 @@ func newSnapshotsListCmd(f *flags) *cobra.Command {
 }
 
 func runSnapshotsList(cmd *cobra.Command, f *flags) error {
-	cfg, _, err := setup(f, cmd.ErrOrStderr())
+	cfg, logger, err := setup(f, cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func runSnapshotsList(cmd *cobra.Command, f *flags) error {
 	if err != nil {
 		return err
 	}
-	repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
+	repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath, logger)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func newSnapshotsShowCmd(f *flags) *cobra.Command {
 		Long:  `Show one snapshot manifest. Use 'latest' for the newest trusted snapshot.`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := setup(f, cmd.ErrOrStderr())
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -124,7 +124,7 @@ func newSnapshotsShowCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath)
+			repo, repoCfg, trust, trusted, err := openVerifiedRepo(cmd.Context(), cfg, repoPath, logger)
 			if err != nil {
 				return err
 			}

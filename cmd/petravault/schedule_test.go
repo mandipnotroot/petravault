@@ -262,7 +262,7 @@ func TestPruneAfterJobSkipsWhenLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	repo, repoCfg, trust, trusted, err := openVerifiedRepo(ctx, cfg, repoPath)
+	repo, repoCfg, trust, trusted, err := openVerifiedRepo(ctx, cfg, repoPath, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
