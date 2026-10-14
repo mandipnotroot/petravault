@@ -170,15 +170,17 @@ func tlsHTTPClient() *http.Client {
 }
 
 // checkEndpointScheme refuses plaintext http:// unless explicitly enabled
-// for local test servers, and rejects non-http(s) schemes.
+// for local test servers, and rejects non-http(s) schemes. Userinfo in the
+// endpoint is redacted from errors so embedded credentials never reach logs.
 func checkEndpointScheme(endpoint string) error {
 	if endpoint == "" {
 		return nil
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("%w: invalid s3 endpoint %q", pverrors.ErrUsage, endpoint)
+		return fmt.Errorf("%w: invalid s3 endpoint %q", pverrors.ErrUsage, redactEndpoint(endpoint))
 	}
+	shown := redactEndpoint(endpoint)
 	switch strings.ToLower(u.Scheme) {
 	case "https":
 		return nil
@@ -187,10 +189,21 @@ func checkEndpointScheme(endpoint string) error {
 		if allow == "1" || allow == "true" || allow == "yes" {
 			return nil
 		}
-		return fmt.Errorf("%w: refusing plaintext http s3 endpoint %q (set %s=1 for local test servers only)", pverrors.ErrUsage, endpoint, AllowHTTPEnv)
+		return fmt.Errorf("%w: refusing plaintext http s3 endpoint %q (set %s=1 for local test servers only)", pverrors.ErrUsage, shown, AllowHTTPEnv)
 	default:
 		return fmt.Errorf("%w: invalid s3 endpoint scheme %q (want https)", pverrors.ErrUsage, u.Scheme)
 	}
+}
+
+// redactEndpoint strips userinfo from an endpoint for error text.
+func redactEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.User == nil {
+		return endpoint
+	}
+	redacted := u.Clone()
+	redacted.User = nil
+	return redacted.String()
 }
 
 // NewS3Client builds the S3 client from S3Options. It uses the SDK-standard
