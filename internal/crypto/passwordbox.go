@@ -6,9 +6,10 @@ package crypto
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+
+	pverrors "petravault/internal/errors"
 )
 
 // boxVersion is the password-box envelope version.
@@ -66,13 +67,13 @@ func Unlock(password, locked []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(locked))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&box); err != nil {
-		return nil, fmt.Errorf("decode keystore envelope: %w", err)
+		return nil, fmt.Errorf("decode keystore envelope: %w: %w", err, pverrors.ErrIntegrity)
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return nil, errors.New("decode keystore envelope: trailing data")
+		return nil, fmt.Errorf("%w: decode keystore envelope: trailing data", pverrors.ErrIntegrity)
 	}
 	if box.Version != boxVersion {
-		return nil, fmt.Errorf("unsupported keystore version %d: want %d", box.Version, boxVersion)
+		return nil, fmt.Errorf("%w: unsupported keystore version %d: want %d", pverrors.ErrIntegrity, box.Version, boxVersion)
 	}
 	kek, err := DeriveKEK(password, box.Salt, Params{
 		Time:    box.Time,
