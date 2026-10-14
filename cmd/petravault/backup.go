@@ -36,7 +36,12 @@ func newBackupCmd(f *flags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup <source>",
 		Short: "Back up a directory tree",
-		Args:  cobra.ExactArgs(1),
+		Long: `Back up a directory tree. Verification runs automatically after backup
+unless disabled via --no-verify or verify_after_backup=false.`,
+		Example: `  petravault backup ~/Documents -r /tmp/pv-repo
+  petravault backup ~/Documents -r /tmp/pv-repo --no-verify
+  petravault backup ~/Documents -r /tmp/pv-repo --exclude '*.tmp' --exclude-caches`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if wantVerify && wantNoVerify {
 				return fmt.Errorf("%w: --verify and --no-verify are mutually exclusive", pverrors.ErrUsage)
@@ -100,7 +105,7 @@ func newBackupCmd(f *flags) *cobra.Command {
 	cmd.Flags().BoolVar(&forceRescan, "force-rescan", false, "disable the unchanged-file fast path")
 	cmd.Flags().StringVar(&sourceID, "source-id", "", "source name (defaults to hostname)")
 	cmd.Flags().StringVar(&ecc, "ecc", "", "erasure profile for this run: off, low, medium, high, or <N>% (defaults to the repository setting)")
-	cmd.Flags().BoolVar(&wantVerify, "verify", false, "verify the new snapshot after backup")
+	cmd.Flags().BoolVar(&wantVerify, "verify", false, "verify the new snapshot after backup (default true; this flag forces it on)")
 	cmd.Flags().BoolVar(&wantNoVerify, "no-verify", false, "skip verify-after-backup")
 	return cmd
 }

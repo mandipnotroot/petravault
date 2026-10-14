@@ -157,9 +157,9 @@ func loadMemberIdentity(fromFile string, fp identity.Fingerprint) (*identity.Ide
 // of band.
 func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *slog.Logger, trust *identity.TrustStore, member *identity.Identity) error {
 	ctx := cmd.Context()
-	repoPath := cfg.ResolveRepository(f.repository)
-	if repoPath == "" {
-		return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+	repoPath, err := resolveRepoPath(cfg, f.repository)
+	if err != nil {
+		return err
 	}
 	repo, err := openRepo(ctx, cfg, repoPath)
 	if err != nil {
@@ -345,9 +345,9 @@ func newTrustPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			repo, err := openRepo(ctx, cfg, repoPath)
@@ -395,9 +395,9 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			repo, err := openRepo(ctx, cfg, repoPath)
@@ -452,9 +452,9 @@ func newTrustSyncCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			repo, err := openRepo(ctx, cfg, repoPath)

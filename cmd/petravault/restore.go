@@ -22,9 +22,13 @@ func newRestoreCmd(f *flags) *cobra.Command {
 		overwrite bool
 	)
 	cmd := &cobra.Command{
-		Use:   "restore <snapshot-id> <destination>",
+		Use:   "restore <snapshot-id|latest> <destination>",
 		Short: "Restore a snapshot to a directory",
-		Args:  cobra.ExactArgs(2),
+		Long: `Restore a snapshot to a directory. Use 'latest' for the newest trusted snapshot:
+  petravault restore latest ./restore`,
+		Example: `  petravault restore latest ./restore
+  petravault restore <snapshot-id> ./restore --include Documents/report.pdf`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
@@ -45,11 +49,10 @@ func newRestoreCmd(f *flags) *cobra.Command {
 			defer master.Zero()
 			sub := master.DeriveSubkeys()
 			defer sub.Zero()
-			id, err := manifest.ParseSnapshotID(args[0])
+			hexID, err := resolveSnapshotID(cmd.Context(), repo, repoCfg.RepositoryID, sub.Data, trust, trusted, args[0])
 			if err != nil {
-				return fmt.Errorf("%w: %w", pverrors.ErrUsage, err)
+				return err
 			}
-			hexID := manifest.FormatSnapshotID(id)
 			dest := args[1]
 			if dest == "" {
 				return fmt.Errorf("%w: destination is empty", pverrors.ErrUsage)

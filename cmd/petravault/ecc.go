@@ -46,9 +46,9 @@ func newECCSetCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			repo, err := openRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {
@@ -102,9 +102,9 @@ func newECCRebuildCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			repo, err := openRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {

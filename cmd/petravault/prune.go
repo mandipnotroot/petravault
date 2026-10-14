@@ -29,8 +29,10 @@ func newPruneCmd(f *flags) *cobra.Command {
 		Long: `Apply retention (--keep-daily/--keep-weekly/--keep-monthly) and garbage-collect ` +
 			`unreferenced chunks. Packs with only dead chunks are deleted, mostly-dead packs are ` +
 			`repacked, indexes are compacted, and pruned snapshots are removed. The newest ` +
-			`snapshot of every source is always kept. Prune takes the maintenance lock and ` +
-			`aborts without deleting anything while a backup is in flight.`,
+			`snapshot of every source is always kept. At least one --keep-* rule is required. ` +
+			`Prune takes the maintenance lock and aborts without deleting anything while a backup is in flight.`,
+		Example: `  petravault prune --keep-daily 30 --keep-weekly 12 --keep-monthly 12 -r /tmp/pv-repo
+  petravault prune --keep-daily 7 --dry-run -r /tmp/pv-repo`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())

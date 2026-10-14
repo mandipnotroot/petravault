@@ -29,9 +29,13 @@ func newScheduleCmd(f *flags) *cobra.Command {
 		Short: "Manage scheduled backups",
 		Long: `Manage unattended backup jobs. Jobs share the manual backup pipeline; ` +
 			`schedules, retries, and retention are the only additions. ` +
+			`With no subcommand it lists jobs. ` +
 			`Scheduled runs cannot prompt for passwords: set PETRAVAULT_PASSWORD_COMMAND ` +
 			`or a mode-0600 PETRAVAULT_PASSWORD_FILE (see the daemon help).`,
 		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runScheduleList(cmd, f)
+		},
 	}
 	cmd.AddCommand(newScheduleAddCmd(f))
 	cmd.AddCommand(newScheduleListCmd(f))
@@ -177,7 +181,7 @@ func buildJob(f *flags, cfg config.Config, p scheduleAddParams) (scheduler.Job, 
 	}
 	repoPath := cmp.Or(f.repository, cfg.DefaultRepository)
 	if strings.TrimSpace(repoPath) == "" {
-		return scheduler.Job{}, fmt.Errorf("%w: no repository selected (use --repository or default_repository)", pverrors.ErrUsage)
+		return scheduler.Job{}, fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository; run `petravault init <path>` to create one)", pverrors.ErrUsage)
 	}
 	if strings.TrimSpace(p.source) == "" {
 		return scheduler.Job{}, fmt.Errorf("%w: --source is required", pverrors.ErrUsage)
@@ -220,25 +224,29 @@ func newScheduleListCmd(f *flags) *cobra.Command {
 		Short: "List scheduled backup jobs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if _, _, err := setup(f, cmd.ErrOrStderr()); err != nil {
-				return err
-			}
-			scheduleDir, _ := scheduleDirs()
-			jobs, err := scheduler.ListJobs(scheduleDir)
-			if err != nil {
-				return err
-			}
-			if len(jobs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no scheduled jobs")
-				return nil
-			}
-			for _, job := range jobs {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s  %s  %s\n",
-					job.Name, enabledMarker(job), scheduleSummary(job), job.Repository, job.Source)
-			}
-			return nil
+			return runScheduleList(cmd, f)
 		},
 	}
+}
+
+func runScheduleList(cmd *cobra.Command, f *flags) error {
+	if _, _, err := setup(f, cmd.ErrOrStderr()); err != nil {
+		return err
+	}
+	scheduleDir, _ := scheduleDirs()
+	jobs, err := scheduler.ListJobs(scheduleDir)
+	if err != nil {
+		return err
+	}
+	if len(jobs) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no scheduled jobs")
+		return nil
+	}
+	for _, job := range jobs {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s  %s  %s\n",
+			job.Name, enabledMarker(job), scheduleSummary(job), job.Repository, job.Source)
+	}
+	return nil
 }
 
 func newScheduleStatusCmd(f *flags) *cobra.Command {

@@ -16,9 +16,14 @@ import (
 func newVerifyCmd(f *flags) *cobra.Command {
 	var deep bool
 	cmd := &cobra.Command{
-		Use:   "verify [<snapshot-id>]",
+		Use:   "verify [<snapshot-id|latest>]",
 		Short: "Verify repository integrity",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Verify repository integrity. With no argument it verifies the whole repository;
+with 'latest' it verifies the newest trusted snapshot.`,
+		Example: `  petravault verify
+  petravault verify latest
+  petravault verify --deep`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
@@ -41,7 +46,10 @@ func newVerifyCmd(f *flags) *cobra.Command {
 			defer sub.Zero()
 			only := ""
 			if len(args) == 1 {
-				only = args[0]
+				only, err = resolveSnapshotID(cmd.Context(), repo, repoCfg.RepositoryID, sub.Data, trust, trusted, args[0])
+				if err != nil {
+					return err
+				}
 			}
 			headsPath, err := headsPathForRepo(repoCfg.RepositoryID)
 			if err != nil {

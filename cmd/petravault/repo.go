@@ -30,7 +30,7 @@ import (
 func resolveRepoPath(cfg config.Config, flag string) (string, error) {
 	repoPath := cfg.ResolveRepository(flag)
 	if repoPath == "" {
-		return "", fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+		return "", fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository; run `petravault init <path>` to create one)", pverrors.ErrUsage)
 	}
 	return repoPath, nil
 }
@@ -273,4 +273,50 @@ func defaultSourceID(flag string) (string, error) {
 // the repository default.
 func eccForRun(flag string, repoCfg repository.Config) string {
 	return cmp.Or(strings.TrimSpace(flag), repoCfg.ECC)
+}
+
+// resolveSnapshotID accepts a snapshot ID or the keyword "latest" (any
+// case). "latest" resolves to the newest trusted snapshot by creation time
+// so operators can restore or verify without copying IDs.
+func resolveSnapshotID(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte, input string) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(input), "latest") {
+		return latestSnapshotID(ctx, repo, repoID, dataKey, trust, trusted)
+	}
+	id, err := manifest.ParseSnapshotID(input)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w (use a snapshot ID or `latest`)", pverrors.ErrUsage, err)
+	}
+	return manifest.FormatSnapshotID(id), nil
+}
+
+// latestSnapshotID returns the newest trusted snapshot by creation time.
+// Untrusted or damaged snapshots are skipped, mirroring snapshots list;
+// when none remain it fails closed instead of guessing.
+func latestSnapshotID(ctx context.Context, repo repository.Repository, repoID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte) (string, error) {
+	ids, err := manifest.List(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", fmt.Errorf("%w: no snapshots (back up first)", pverrors.ErrUsage)
+	}
+	lookup := trustedLookup(trust, trusted)
+	type candidate struct {
+		id      string
+		created time.Time
+	}
+	var best *candidate
+	for _, id := range ids {
+		m, err := manifest.OpenTrusted(ctx, repo, repoID, dataKey, id, lookup)
+		if err != nil {
+			continue
+		}
+		if best == nil || m.CreatedAt.After(best.created) {
+			best = &candidate{id: id, created: m.CreatedAt}
+		}
+	}
+	if best == nil {
+		return "", fmt.Errorf("%w: no trusted snapshots (run verify to see why)", pverrors.ErrUntrustedSigner)
+	}
+	return best.id, nil
 }

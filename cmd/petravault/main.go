@@ -120,7 +120,13 @@ func newInitCmd(f *flags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [path|s3:bucket[/prefix]]",
 		Short: "Create a new repository",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a new repository. Create an identity first:
+  petravault identity create --name alice
+  petravault init /tmp/pv-repo`,
+		Example: `  petravault identity create --name alice
+  petravault init /tmp/pv-repo
+  petravault init s3:my-backups --ecc high`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, logger, err := setup(f, cmd.ErrOrStderr())
 			if err != nil {
@@ -224,9 +230,9 @@ func newInfoCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			repo, err := openRepo(cmd.Context(), cfg, repoPath)
 			if err != nil {

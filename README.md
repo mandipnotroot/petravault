@@ -47,11 +47,14 @@ See `CONTRIBUTING.md` for install commands.
 petravault identity create --name alice
 petravault init /tmp/pv-repo --ecc medium
 petravault backup ~/Documents -r /tmp/pv-repo
-petravault snapshots list -r /tmp/pv-repo
+petravault snapshots -r /tmp/pv-repo
 petravault verify -r /tmp/pv-repo
-petravault restore <snapshot-id> /tmp/pv-restore -r /tmp/pv-repo
+petravault restore latest /tmp/pv-restore -r /tmp/pv-repo
 petravault prune --keep-daily 30 --keep-weekly 12 --keep-monthly 12 -r /tmp/pv-repo
 ```
+
+Bare `snapshots` lists, bare `schedule` lists jobs, and `latest` means the
+newest trusted snapshot (`restore latest`, `verify latest`, `snapshots show latest`).
 
 No configuration file is needed: every setting has a built-in default
 (ECC `medium`, log level `info`, concurrency 4), and passwords are asked

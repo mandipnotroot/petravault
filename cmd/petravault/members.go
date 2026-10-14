@@ -15,8 +15,6 @@ import (
 	"petravault/internal/repository"
 
 	"github.com/spf13/cobra"
-
-	pverrors "petravault/internal/errors"
 )
 
 func newMembersCmd(f *flags) *cobra.Command {
@@ -59,9 +57,9 @@ func newMembersPublishCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			repo, err := openRepo(ctx, cfg, repoPath)
@@ -114,9 +112,9 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repoPath := cfg.ResolveRepository(f.repository)
-			if repoPath == "" {
-				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			repoPath, err := resolveRepoPath(cfg, f.repository)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			repo, err := openRepo(ctx, cfg, repoPath)

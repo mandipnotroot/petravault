@@ -707,15 +707,19 @@ petravault recovery {export|import}
 
 petravault backup <source> [--exclude GLOB] [--exclude-file F] [--exclude-caches]
                   [--one-file-system] [--force-rescan] [--verify|--no-verify] [--source-id ID] [--ecc LEVEL]
-petravault snapshots {list|show <id>}
-petravault restore <snapshot> <destination> [--include PATH] [--overwrite]
+petravault snapshots [list|show <id|latest>]  # bare `snapshots` lists
+petravault restore <snapshot|latest> <destination> [--include PATH] [--overwrite]
 
-petravault verify [<snapshot>] [--deep]
+petravault verify [<snapshot|latest>] [--deep]
 
-petravault schedule {list|add|remove|enable|disable|run|status|daemon}
+petravault schedule [list|add|remove|enable|disable|run|status|daemon]  # bare `schedule` lists
 
 petravault prune [--keep-daily N] [--keep-weekly N] [--keep-monthly N] [--dry-run]
 ```
+
+`latest` means the newest trusted snapshot by creation time (untrusted snapshots
+are skipped; with none it fails closed). Missing-repository errors name the
+flag, environment, config, and `init` step.
 
 **Exit codes:** `0` success; `1` error; `2` usage error; `3` completed with warnings (for example, files unreadable or still changing during backup); `4` integrity or trust failure (tampering, bad signature, rollback detected, unrecoverable corruption).
 
