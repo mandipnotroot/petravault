@@ -293,7 +293,9 @@ func ReadConfig(ctx context.Context, repo Repository, trusted map[string][]byte)
 		return Config{}, "", fmt.Errorf("read repository config: %w", err)
 	}
 	defer r.Close()
-	envBytes, err := io.ReadAll(r)
+	// Config envelopes are small JSON; cap the read so a hostile
+	// repository cannot OOM the reader with a giant config object.
+	envBytes, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return Config{}, "", fmt.Errorf("read repository config: %w", err)
 	}

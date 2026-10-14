@@ -570,7 +570,9 @@ func readLock(ctx context.Context, repo Repository, key string) (Lock, error) {
 		return Lock{}, fmt.Errorf("read lock %s: %w", key, err)
 	}
 	defer r.Close()
-	raw, err := io.ReadAll(r)
+	// Locks are tiny JSON; cap the read so a hostile repository cannot
+	// OOM the reader with a giant lock object.
+	raw, err := io.ReadAll(io.LimitReader(r, 64<<10))
 	if err != nil {
 		return Lock{}, fmt.Errorf("read lock %s: %w", key, err)
 	}
