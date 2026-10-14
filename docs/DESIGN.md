@@ -269,17 +269,21 @@ The fingerprint is BLAKE3 over a length-prefixed encoding of both public keys un
 
 ```bash
 petravault trust add <fingerprint>                # CLI shows the full fingerprint before accepting
-petravault trust add <fingerprint> --grant-read   # also seals the master key to that identity's KEM key
+petravault trust add <fingerprint> --grant-access   # also seals the master key to that identity's KEM key
 petravault identity import bob.pub                # then verify the fingerprint out of band
 ```
 
-Trust is an explicit list of fingerprints, which is sufficient for personal and small-team repositories. There is no transitive trust. `trust add` obtains the public keys from `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them only if their hash equals the fingerprint the user confirmed, so the repository-side copy is safe to use. `identity import --trust` folds the same check into one step for cloning your own key to a new machine; anyone else's key still goes through the out-of-band fingerprint check first. A new member must trust the granting identity's fingerprint before their client will open a key slot or the repository config that identity signed (§4.2, §8).
+Trust is an explicit list of fingerprints, which is sufficient for personal and small-team repositories. There is no transitive trust. `trust add` obtains the public keys from `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them only if their hash equals the fingerprint the user confirmed, so the repository-side copy is safe to use. `identity import --trust` folds the same check into one step for cloning your own key to a new machine; anyone else's key still goes through the out-of-band fingerprint check first. `trust sync` lists the advisory repo copies for discovery and approves a typed fingerprint with the same hash check. A new member must trust the granting identity's fingerprint before their client will open a key slot or the repository config that identity signed (§4.2, §8).
 
 ### 5.2 Trust anchors live on the client
 
 A trust list stored in the repository would let an attacker who controls the repository add Mallory's key and sign fake snapshots. The **authoritative trust list is therefore a client-local file** (`$XDG_CONFIG_HOME/petravault/trust/{trusted-keys,revoked}/`). Copies of public keys in the repository are advisory only. A snapshot is accepted only if its signer's fingerprint is in the client's own trust list and not in its revoked list.
 
 Revocation records (`fingerprint`, `reason`, `created_at`, `signature`) are signed by another trusted identity, or by the key itself for self-revocation. They immediately disqualify a key from verifying new snapshots; historical snapshots follow the repository's recorded policy. Records are also published to `revocations/` in the repository as an advisory channel; a client adds one to its local revoked list only after verifying its signature against its own trust list. A hostile repository can withhold a revocation but cannot forge one, and records can only add to the revoked list, never remove from it.
+
+Trust-list backup (`trust publish` / `trust recover`). Each client may publish its own trust view — trusted identities plus revocation envelopes — HPKE-sealed to its own KEM key and signed, at `trust-lists/<own-fingerprint>.json`, and rebuild a lost local store from it. Only the owner opens it, so the trust graph stays hidden from storage observers and ex-members, and recovery needs no prior trust. A hostile repository can withhold or roll the record back but can neither read nor alter it. Recovery restores past human decisions, never makes new ones: the out-of-band fingerprint checks from when each member was added are preserved, not repeated. A stale record misses recent additions (safe direction: unknown signers fail closed) and recent revocations (unsafe direction), so `recover` prints the export time, re-publish is due after every trust change, and revocations are re-confirmed with the team. Heads still re-learn on the next verify (§9).
+
+Shared member roster (`members publish` / `members sync`). The granter additionally publishes the non-revoked membership sealed under the repository data key at the single key `members.json`, signed by the publisher. Any member opens it with the master they hold, checks the publisher against their own trust list, and adopts the entries — onboarding a new machine costs one human check (the granter) instead of one per member. The roster proposes trust, never access: slots still gate every byte. It does not exclude members revoked after export (re-publish on every trust change) and does not hide membership from ex-members (they hold the master, §4.6). Adopting is explicit per run, never silent.
 
 ### 5.3 Explicit limitations
 
@@ -389,6 +393,8 @@ repository/
 ├── config/repository.json        # signed envelope: repository_id, crypto suite, chunker + pack + default ECC parameters
 ├── keys/<fingerprint>.slot       # master key sealed to each member, signed by the granter (§4.2)
 ├── identities/<fingerprint>.pub  # members' public keys (advisory; trust anchors are client-side, §5.2)
+├── trust-lists/<fingerprint>.json # self-sealed trust snapshots for recovery (owner-only readable, §5.2)
+├── members.json                # master-sealed member roster for onboarding (members only, §5.2)
 ├── revocations/<fingerprint>.rev # signed revocation records (advisory; clients verify before use, §5.2)
 ├── snapshots/<snapshot-id>       # ONE immutable object: encrypted {signed manifest}
 ├── packs/<pack-id>               # ~16 MiB; many independently-encrypted chunk blobs + encrypted header
@@ -672,7 +678,7 @@ petravault/
 3. **Chunking, packs, incremental backup:** `Chunker` interface, `go-cdc-chunkers` (KFastCDC) adapter, golden tests, keyed chunk IDs, packs, immutable indexes, dedup, unchanged-file fast path, excludes, file metadata capture
 4. **Identity & trust:** keygen, fingerprints, client-local trust list, import/export, revocation
 5. **Signed manifests:** ML-DSA-65 via `crypto/mldsa` behind a `Signer` interface; signed `repository.json`; single-object snapshot commit
-6. **Key slots:** `crypto/hpke` X-Wing seal/open, granter-signed slot envelopes, `trust add --grant-read`, pinned test vectors
+6. **Key slots:** `crypto/hpke` X-Wing seal/open, granter-signed slot envelopes, `trust add --grant-access`, pinned test vectors
 7. **Reed-Solomon:** parity sidecars, profiles (`low`/`medium`/`high`) and custom percentages (`medium` default), `ecc set` / `ecc rebuild`, shard checksums, repair, AEAD re-verification
 8. **Restore & verification:** `restore` (with its path-safety rules), `verify`, `verify --deep`, verify-after-backup, client-local head records
 9. **S3:** `S3Repository` on `aws-sdk-go-v2`, auth, TLS, multipart upload, ranged reads, conditional-create lock, ECC sidecars on S3
@@ -693,7 +699,8 @@ petravault info
 petravault ecc {set <level>|rebuild}
 
 petravault identity {create|list|export|import [--trust]}
-petravault trust {list|add [--grant-read]|remove|revoke}
+petravault trust {list|add [--grant-access]|remove|revoke|publish|recover|sync [fingerprint...]}
+petravault members {publish|sync}
 
 petravault backup <source> [--exclude GLOB] [--exclude-file F] [--exclude-caches]
                   [--one-file-system] [--force-rescan] [--verify|--no-verify] [--source-id ID] [--ecc LEVEL]

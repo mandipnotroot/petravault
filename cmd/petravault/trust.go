@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"petravault/internal/config"
 	"petravault/internal/crypto"
@@ -31,6 +32,9 @@ func newTrustCmd(f *flags) *cobra.Command {
 	cmd.AddCommand(newTrustAddCmd(f))
 	cmd.AddCommand(newTrustRemoveCmd(f))
 	cmd.AddCommand(newTrustRevokeCmd(f))
+	cmd.AddCommand(newTrustPublishCmd(f))
+	cmd.AddCommand(newTrustRecoverCmd(f))
+	cmd.AddCommand(newTrustSyncCmd(f))
 	return cmd
 }
 
@@ -72,7 +76,7 @@ func newTrustListCmd(f *flags) *cobra.Command {
 
 func newTrustAddCmd(f *flags) *cobra.Command {
 	var fromFile string
-	var grantRead bool
+	var grantAccess bool
 	cmd := &cobra.Command{
 		Use:   "add <fingerprint>",
 		Short: "Trust an identity",
@@ -99,18 +103,18 @@ func newTrustAddCmd(f *flags) *cobra.Command {
 			logger.InfoContext(cmd.Context(), "identity trusted",
 				slog.String("name", id.Name),
 				slog.String("fingerprint", id.Fingerprint.Grouped()))
-			if !grantRead {
+			if !grantAccess {
 				return nil
 			}
-			if err := grantReadAccess(cmd, f, cfg, logger, trust, id); err != nil {
+			if err := grantMemberAccess(cmd, f, cfg, logger, trust, id); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "granted read access to %s\n", id.Fingerprint.Grouped())
+			fmt.Fprintf(cmd.OutOrStdout(), "granted access to %s\n", id.Fingerprint.Grouped())
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&fromFile, "from", "", "public key file to trust")
-	cmd.Flags().BoolVar(&grantRead, "grant-read", false, "also seal the repository key to this identity")
+	cmd.Flags().BoolVar(&grantAccess, "grant-access", false, "also seal the repository key to this identity (full member: reads and backs up)")
 	return cmd
 }
 
@@ -146,12 +150,12 @@ func loadMemberIdentity(fromFile string, fp identity.Fingerprint) (*identity.Ide
 	return id, nil
 }
 
-// grantReadAccess seals the repository master key to the newly trusted
+// grantMemberAccess seals the repository master key to the newly trusted
 // member and publishes the slot plus an advisory public copy
 // (DESIGN.md §4.2). The granter must already hold read access: the master
 // key is opened from the granter's own slot, never generated or shared out
 // of band.
-func grantReadAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *slog.Logger, trust *identity.TrustStore, member *identity.Identity) error {
+func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *slog.Logger, trust *identity.TrustStore, member *identity.Identity) error {
 	ctx := cmd.Context()
 	repoPath := cfg.ResolveRepository(f.repository)
 	if repoPath == "" {
@@ -329,6 +333,228 @@ func newTrustRevokeCmd(f *flags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "reason for revocation (required)")
 	return cmd
+}
+
+func newTrustPublishCmd(f *flags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "publish",
+		Short: "Publish your trust view to the repository for recovery",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			repoPath := cfg.ResolveRepository(f.repository)
+			if repoPath == "" {
+				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			}
+			ctx := cmd.Context()
+			repo, err := openRepo(ctx, cfg, repoPath)
+			if err != nil {
+				return err
+			}
+			signer, err := resolveSigner(f, cfg)
+			if err != nil {
+				return err
+			}
+			password, err := identity.ReadPassword(ctx, "Enter password for publishing identity: ")
+			if err != nil {
+				return err
+			}
+			defer clear(password)
+			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(signer.Fingerprint, password)
+			if err != nil {
+				return err
+			}
+			trust := identity.NewTrustStore(trustDir())
+			env, err := identity.PublishTrustList(priv, trust, nil)
+			if err != nil {
+				return err
+			}
+			key := identity.TrustListKey(priv.Fingerprint())
+			if err := repo.PutObject(ctx, key, bytes.NewReader(env)); err != nil {
+				return fmt.Errorf("publish trust list: %w", err)
+			}
+			logger.InfoContext(ctx, "trust list published",
+				slog.String("owner", priv.Fingerprint().Grouped()))
+			fmt.Fprintf(cmd.OutOrStdout(), "published trust list for %s\nre-publish after trust changes so recovery stays fresh\n",
+				priv.Fingerprint().Grouped())
+			return nil
+		},
+	}
+}
+
+func newTrustRecoverCmd(f *flags) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "recover",
+		Short: "Recover your trust store from the repository copy",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := setup(f, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			repoPath := cfg.ResolveRepository(f.repository)
+			if repoPath == "" {
+				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			}
+			ctx := cmd.Context()
+			repo, err := openRepo(ctx, cfg, repoPath)
+			if err != nil {
+				return err
+			}
+			owner, err := resolveSigner(f, cfg)
+			if err != nil {
+				return err
+			}
+			password, err := identity.ReadPassword(ctx, "Enter password for recovering identity: ")
+			if err != nil {
+				return err
+			}
+			defer clear(password)
+			priv, err := identity.NewStore(keystoreDir()).LoadPrivate(owner.Fingerprint, password)
+			if err != nil {
+				return err
+			}
+			r, err := repo.GetObject(ctx, identity.TrustListKey(owner.Fingerprint))
+			if err != nil {
+				return fmt.Errorf("read published trust list for %s: %w (publish it first with `trust publish`)",
+					owner.Fingerprint.Grouped(), err)
+			}
+			defer r.Close()
+			env, err := io.ReadAll(r)
+			if err != nil {
+				return fmt.Errorf("read published trust list for %s: %w", owner.Fingerprint.Grouped(), err)
+			}
+			trust := identity.NewTrustStore(trustDir())
+			summary, err := identity.RecoverTrustList(env, priv, trust)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "recovered trust list for %s: %d trusted, %d revoked (published %s)\n",
+				summary.Owner.Grouped(), summary.Trusted, summary.Revoked,
+				summary.ExportedAt.Format("2006-01-02T15:04:05Z"))
+			fmt.Fprintf(cmd.OutOrStdout(), "re-confirm revocations with your team if this looks old, then run verify to re-learn heads\n")
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newTrustSyncCmd(f *flags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync [fingerprint...]",
+		Short: "List repo members, or trust listed ones from their repo copies",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, logger, err := setup(f, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			repoPath := cfg.ResolveRepository(f.repository)
+			if repoPath == "" {
+				return fmt.Errorf("%w: no repository selected (use --repository, PETRAVAULT_REPOSITORY, or default_repository)", pverrors.ErrUsage)
+			}
+			ctx := cmd.Context()
+			repo, err := openRepo(ctx, cfg, repoPath)
+			if err != nil {
+				return err
+			}
+			trust := identity.NewTrustStore(trustDir())
+			if len(args) == 0 {
+				return listRepoMembers(ctx, cmd, repo, trust)
+			}
+			for _, raw := range args {
+				fp, err := identity.ParseFingerprint(raw)
+				if err != nil {
+					return err
+				}
+				if err := approveRepoMember(ctx, cmd, repo, trust, logger, fp); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// listRepoMembers shows every advisory repo copy with its local trust state.
+// The repo copy is a hint for discovery; nothing is trusted by listing it.
+func listRepoMembers(ctx context.Context, cmd *cobra.Command, repo repository.Repository, trust *identity.TrustStore) error {
+	keys, err := repo.List(ctx, identity.IdentityPrefix)
+	if err != nil {
+		return fmt.Errorf("list repo members: %w", err)
+	}
+	if len(keys) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no members in repository")
+		return nil
+	}
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		fp, err := identity.ParseFingerprint(strings.TrimSuffix(strings.TrimPrefix(key, identity.IdentityPrefix), identity.IdentitySuffix))
+		if err != nil {
+			continue
+		}
+		name := "?"
+		if pub := fetchRepoMember(ctx, repo, fp); pub != nil {
+			name = pub.Name
+		}
+		slot, _ := repo.Exists(ctx, identity.SlotKey(fp))
+		status := "untrusted"
+		if revoked, err := trust.IsRevoked(fp); err == nil && revoked {
+			status = "revoked"
+		} else if ok, err := trust.IsTrusted(fp); err == nil && ok {
+			status = "trusted"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  slot:%t  %s\n", fp.Grouped(), name, slot, status)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "approve with: petravault trust sync <fingerprint> (verify it out of band first)")
+	return nil
+}
+
+// approveRepoMember trusts one repo member from its advisory copy. The copy
+// is accepted only when its hash equals the typed fingerprint, the same
+// check `trust add` performs, so a swapped repo copy fails closed.
+func approveRepoMember(ctx context.Context, cmd *cobra.Command, repo repository.Repository, trust *identity.TrustStore, logger *slog.Logger, fp identity.Fingerprint) error {
+	id := fetchRepoMember(ctx, repo, fp)
+	if id == nil {
+		return fmt.Errorf("%w: no repo copy for %s", pverrors.ErrUsage, fp.Grouped())
+	}
+	if !id.Fingerprint.Equal(fp) {
+		return fmt.Errorf("repo copy names %s, want %s: %w",
+			id.Fingerprint.Grouped(), fp.Grouped(), pverrors.ErrIntegrity)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "trusting identity %q\nfingerprint: %s\n", id.Name, id.Fingerprint.Grouped())
+	if err := trust.Add(id); err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "identity trusted from repo copy",
+		slog.String("name", id.Name),
+		slog.String("fingerprint", id.Fingerprint.Grouped()))
+	fmt.Fprintf(cmd.OutOrStdout(), "trusted %s\n", id.Fingerprint.Grouped())
+	return nil
+}
+
+// fetchRepoMember returns the advisory repo copy for fp, or nil when it is
+// missing or corrupt. Corruption fails the single approval, never the list.
+func fetchRepoMember(ctx context.Context, repo repository.Repository, fp identity.Fingerprint) *identity.Identity {
+	r, err := repo.GetObject(ctx, identity.AdvisoryKey(fp))
+	if err != nil {
+		return nil
+	}
+	defer r.Close()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil
+	}
+	id, err := identity.ParsePublic(raw)
+	if err != nil {
+		return nil
+	}
+	return id
 }
 
 // resolveSigner picks the revoking identity from --identity, then
