@@ -914,7 +914,7 @@ Go-specific reminders:
 ## 18. Release Builds
 
 DESIGN.md §13 requires reproducible-aim builds and release artifacts published with checksums, a
-detached signature, and an SBOM.
+build-provenance attestation, and an SBOM.
 
 ```bash
 CGO_ENABLED=0 go build -trimpath \
@@ -923,7 +923,7 @@ CGO_ENABLED=0 go build -trimpath \
 ```
 
 - `-trimpath`, `CGO_ENABLED=0`, and a pinned Go toolchain (the `go` line in `go.mod`) are the baseline for reproducibility.
-- Publish `SHA256SUMS`, a detached signature over it, and an SBOM (for example CycloneDX via `cyclonedx-gomod`).
+- Publish `SHA256SUMS`, a Sigstore build-provenance attestation over the artifacts (`actions/attest`, no keys to manage), and an SBOM (for example CycloneDX via `cyclonedx-gomod`). Users verify with `gh attestation verify` and `sha256sum -c SHA256SUMS`.
 - Tags use SemVer. Because commits follow Conventional Commits, tools such as `git-cliff` or `release-please` can derive the version bump (`feat` is MINOR, `fix` is PATCH, breaking is MAJOR) and the changelog.
 
 ---

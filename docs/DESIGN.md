@@ -634,7 +634,7 @@ Pruning computes `unreferenced = all_chunks − chunks_referenced_by_retained_sn
 | Corrupt more shards than parity can cover | Recovery impossible, reported clearly |
 | Modify a schedule job file (or loosen its permissions) | Job refused; logged |
 
-CI runs formatting (`golangci-lint fmt`, i.e. gofumpt + goimports), `go vet`, `golangci-lint run`, `go test`, `go test -race`, `go build`, `go mod verify`, `govulncheck`, dependency scanning, a dependency license check (fails on anything incompatible with GPL-3.0-only), and a REUSE compliance check (`reuse lint`) on every push. Release builds aim for reproducibility, and release artifacts are published with checksums, a detached signature, and an SBOM.
+CI runs formatting (`golangci-lint fmt`, i.e. gofumpt + goimports), `go vet`, `golangci-lint run`, `go test`, `go test -race`, `go build`, `go mod verify`, `govulncheck`, dependency scanning, a dependency license check (fails on anything incompatible with GPL-3.0-only), and a REUSE compliance check (`reuse lint`) on every push. Release builds aim for reproducibility, and release artifacts are published with checksums, a Sigstore build-provenance attestation, and an SBOM.
 
 ---
 

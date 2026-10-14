@@ -5,10 +5,11 @@
 #
 # Pushing a `v*` tag builds reproducible-aim binaries (CGO_ENABLED=0,
 # -trimpath, pinned toolchain from go.mod, version from the tag), a
-# SHA256SUMS checksum file, and a CycloneDX SBOM, then opens a *draft*
-# GitHub release with those assets. A maintainer attaches a detached GPG
-# signature over SHA256SUMS (SHA256SUMS.asc) to the draft before
-# publishing it.
+# SHA256SUMS checksum file, and a CycloneDX SBOM, signs a SLSA
+# build-provenance attestation over the artifacts with Sigstore (no keys to
+# manage), then opens a *draft* GitHub release with those assets for
+# maintainer review before publishing. Users verify with
+# `gh attestation verify` (provenance) and `sha256sum -c SHA256SUMS`.
 name: release
 on:
   push:
@@ -16,6 +17,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -47,11 +50,20 @@ jobs:
           cat dist/SHA256SUMS
           make sbom
           mv bom.json dist/petravault-"${GITHUB_REF_NAME}".bom.json
+      - name: Attest build provenance and SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*"
+      - name: Attest SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist/*"
+          sbom-path: dist/petravault-${{ github.ref_name }}.bom.json
       - name: Open draft release with artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${GITHUB_REF_NAME}" --draft \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Petravault ${GITHUB_REF_NAME}. Verify with: (cd dist && sha256sum -c SHA256SUMS). SBOM: *.bom.json (CycloneDX)." \
+            --notes "Petravault ${GITHUB_REF_NAME}. Verify with: gh attestation verify <binary> --repo <owner>/<repo>, then (cd dist && sha256sum -c SHA256SUMS). SBOM: *.bom.json (CycloneDX)." \
             dist/*
