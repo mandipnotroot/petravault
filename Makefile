@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Petravault Contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-.PHONY: fmt vet lint test test-integration fuzz cover vuln license reuse tidy fix build check
+.PHONY: fmt vet lint test test-integration fuzz cover vuln license reuse tidy fix build demo check
 
 TESTFLAGS := -race -shuffle=on -count=1
 
@@ -54,6 +54,9 @@ fix:
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$$(git describe --tags --always --dirty)" -o bin/petravault ./cmd/petravault
+
+demo: build
+	./demo/demo.sh
 
 # Run before every PR
 check: fmt vet lint test build vuln license reuse

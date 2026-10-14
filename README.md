@@ -53,6 +53,18 @@ S3 repositories are addressed as `s3:<bucket>[/<prefix>]` (see
 Exit codes: `0` ok, `1` error, `2` usage, `3` warnings, `4`
 integrity/trust failure.
 
+## Demo
+
+```bash
+make demo    # end-to-end Definition of Done walkthrough (docs/DESIGN.md §17)
+```
+
+Runs `demo/demo.sh`: identity → init → backup → incremental backup →
+schedule → verify → second member → concurrent backups → erasure-coding
+maintenance and fault injection → tamper/rollback/unauthorized-signer
+detection → prune → byte-identical restore. All state is isolated under a
+temporary workspace that is removed on success (see `demo/README.md`).
+
 ## Common commands
 
 ```bash
