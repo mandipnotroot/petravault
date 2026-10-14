@@ -273,7 +273,7 @@ petravault trust add <fingerprint> --grant-read   # also seals the master key to
 petravault identity import bob.pub                # then verify the fingerprint out of band
 ```
 
-Trust is an explicit list of fingerprints, which is sufficient for personal and small-team repositories. There is no transitive trust. `trust add` obtains the public keys from `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them only if their hash equals the fingerprint the user confirmed, so the repository-side copy is safe to use. A new member must trust the granting identity's fingerprint before their client will open a key slot or the repository config that identity signed (§4.2, §8).
+Trust is an explicit list of fingerprints, which is sufficient for personal and small-team repositories. There is no transitive trust. `trust add` obtains the public keys from `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them only if their hash equals the fingerprint the user confirmed, so the repository-side copy is safe to use. `identity import --trust` folds the same check into one step for cloning your own key to a new machine; anyone else's key still goes through the out-of-band fingerprint check first. A new member must trust the granting identity's fingerprint before their client will open a key slot or the repository config that identity signed (§4.2, §8).
 
 ### 5.2 Trust anchors live on the client
 
@@ -692,7 +692,7 @@ petravault init [path|s3:bucket[/prefix]] [--ecc off|low|medium|high|N%]
 petravault info
 petravault ecc {set <level>|rebuild}
 
-petravault identity {create|list|export|import}
+petravault identity {create|list|export|import [--trust]}
 petravault trust {list|add [--grant-read]|remove|revoke}
 
 petravault backup <source> [--exclude GLOB] [--exclude-file F] [--exclude-caches]

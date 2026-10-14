@@ -26,6 +26,7 @@ petravault identity create --name alice     # also self-trusts
 petravault identity list
 petravault identity export --output alice.pub
 petravault identity import alice.pub        # then verify the fingerprint out of band
+petravault identity import alice.pub --trust # same-step trust, only for your own keys on a new machine
 ```
 
 Private keys live in `$XDG_DATA_HOME/petravault/identities/<fingerprint>/`

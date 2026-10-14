@@ -152,7 +152,8 @@ func newIdentityExportCmd(f *flags) *cobra.Command {
 }
 
 func newIdentityImportCmd(f *flags) *cobra.Command {
-	return &cobra.Command{
+	var trustSelf bool
+	cmd := &cobra.Command{
 		Use:   "import <file.pub>",
 		Short: "Import an identity's public keys",
 		Args:  cobra.ExactArgs(1),
@@ -175,11 +176,30 @@ func newIdentityImportCmd(f *flags) *cobra.Command {
 			logger.InfoContext(cmd.Context(), "identity imported",
 				slog.String("name", id.Name),
 				slog.String("fingerprint", id.Fingerprint.Grouped()))
-			fmt.Fprintf(cmd.OutOrStdout(), "imported identity %q\nfingerprint: %s\nverify the fingerprint out of band, then run: petravault trust add %s\n",
-				id.Name, id.Fingerprint.Grouped(), id.Fingerprint.String())
+			fmt.Fprintf(cmd.OutOrStdout(), "imported identity %q\nfingerprint: %s\n",
+				id.Name, id.Fingerprint.Grouped())
+			if !trustSelf {
+				fmt.Fprintf(cmd.OutOrStdout(), "verify the fingerprint out of band, then run: petravault trust add %s\n",
+					id.Fingerprint.String())
+				return nil
+			}
+			// --trust repeats the trust-add verification (the fingerprint
+			// is recomputed inside Add and a mismatch fails closed), so
+			// importing a swapped file still fails. Use it only for your
+			// own previously verified keys when cloning to a new machine;
+			// anyone else's key still needs the out-of-band check above.
+			if err := identity.NewTrustStore(trustDir()).Add(id); err != nil {
+				return err
+			}
+			logger.InfoContext(cmd.Context(), "identity self-trusted",
+				slog.String("name", id.Name),
+				slog.String("fingerprint", id.Fingerprint.Grouped()))
+			fmt.Fprintf(cmd.OutOrStdout(), "trusted %s\n", id.Fingerprint.Grouped())
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&trustSelf, "trust", false, "also add to the local trust store (only for your own keys when cloning to a new machine)")
+	return cmd
 }
 
 // defaultIdentityName prefers the OS user name and falls back to "default".

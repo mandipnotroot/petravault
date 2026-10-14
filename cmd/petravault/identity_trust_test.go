@@ -265,3 +265,28 @@ func TestTrustGrantReadRejectsUnknownRepository(t *testing.T) {
 		t.Fatal("trust add --grant-read succeeded without a repository")
 	}
 }
+
+func TestIdentityImportTrustFlag(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+
+	pubFile := filepath.Join(t.TempDir(), "alice.pub")
+	runCmd(t, "identity", "export", fp, "--output", pubFile)
+
+	// Fresh client, default import: trusted list stays empty (fail closed).
+	isolatedIdentityEnv(t, "other-password")
+	runCmd(t, "identity", "import", pubFile)
+	out, _ = runCmd(t, "trust", "list")
+	if strings.Contains(out, "alice") {
+		t.Fatalf("trust list after plain import = %q, want no trusted identities", out)
+	}
+
+	// Fresh client, import --trust: self-trusted in one step.
+	isolatedIdentityEnv(t, "third-password")
+	runCmd(t, "identity", "import", pubFile, "--trust")
+	out, _ = runCmd(t, "trust", "list")
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("trust list after import --trust = %q, want alice", out)
+	}
+}
