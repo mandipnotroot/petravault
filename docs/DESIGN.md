@@ -114,9 +114,13 @@ The scanner compares each file's `(path, size, mtime, inode, ctime)` with the **
 
 Two safeguards keep the fast path honest. Timestamps are compared at full (nanosecond) precision, and any file whose mtime or ctime falls within a couple of seconds of the parent snapshot's start is always re-read (the "racily clean" problem, where a later write lands in the same timestamp tick). A file is also `stat`ed before and after it is read; if it changed in between, it is re-read once, and if it is still changing the backup records it, logs a warning, and finishes with the warning exit code (§16).
 
+Source traversal and reads use one retained `os.Root` capability. Before any regular-file bytes are read, the opened descriptor must still name the scanned regular file; Unix source opens also refuse trailing symlinks and are nonblocking so replacement with a FIFO cannot hang the open. Path substitution must not upload data from outside the selected source, even as an orphan pack.
+
 ### 3.5 Excludes
 
 `--exclude <glob>`, `--exclude-file <path>`, `--exclude-caches`, and `--one-file-system` are part of `backup`. Excluded paths are not recorded in the manifest.
+
+Recursive glob matching treats `?` and character classes as Unicode characters, consistently with ordinary glob matching, not as individual UTF-8 bytes.
 
 ### Incremental logic
 
@@ -237,7 +241,7 @@ petravault ecc set high        # new default for objects written from now on (sa
 petravault ecc rebuild         # re-protect existing objects with the current setting
 ```
 
-`ecc set` only changes the default recorded in the signed `repository.json` (the acting identity re-signs it); existing objects keep their old parity and stay repairable under it. `ecc rebuild` rewrites sidecars only. Parity is computed over ciphertext, so the objects themselves are never touched. Each object is first repaired if needed and AEAD-verified, so damage is never encoded into fresh parity, and the new sidecar is written before the old one is replaced. Rebuilding to `off` removes sidecars. It reads every object once (on S3 that means download cost) and takes the maintenance lock (§10.2; it cannot overlap a prune, and backups keep running), so it is meant to be run rarely. On S3 it needs maintenance credentials (§8). Prune's repack (§11.3) also writes fresh parity under the current setting, so a repository drifts toward its setting over time even without a rebuild.
+`ecc set` only changes the default recorded in the signed `repository.json` (the acting identity re-signs it); existing objects keep their old parity and stay repairable under it. `ecc rebuild` rewrites sidecars only. Parity is computed over ciphertext, so the objects themselves are never touched. Each object is checked and, if needed, repaired in memory and AEAD-verified. If that repair differs from the durable object, rebuild fails with an integrity error and preserves the existing sidecar: removing or replacing parity must never discard the only recovery material for still-damaged stored bytes. Durable ciphertext must be repaired separately before rebuilding its sidecar. Otherwise the new sidecar is written before the old one is replaced. Rebuilding intact objects to `off` removes sidecars. It reads every object once (on S3 that means download cost) and takes the maintenance lock (§10.2; it cannot overlap a prune, and backups keep running), so it is meant to be run rarely. On S3 it needs maintenance credentials (§8). Prune's repack (§11.3) also writes fresh parity under the current setting, so a repository drifts toward its setting over time even without a rebuild.
 
 **Repair.** Damaged shards are identified by their checksums (they become known erasures), reconstructed, and the result is **re-verified by AEAD**. Reed-Solomon recovers erasures; it is never a substitute for cryptographic integrity, and tampered shards that reconstruct to invalid ciphertext are rejected. Damage beyond the parity budget is reported as unrecoverable, never silently ignored. Parity does not protect against loss of the whole object or repository (§12).
 
@@ -282,6 +286,8 @@ A trust list stored in the repository would let an attacker who controls the rep
 Revocation records (`fingerprint`, `reason`, `created_at`, `signature`) are signed by another trusted identity, or by the key itself for self-revocation. They immediately disqualify a key from verifying new snapshots; historical snapshots follow the repository's recorded policy. Records are also published to `revocations/` in the repository as an advisory channel; a client adds one to its local revoked list only after verifying its signature against its own trust list. A hostile repository can withhold a revocation but cannot forge one, and records can only add to the revoked list, never remove from it. A repository config signed by a revoked or removed key is refused outright (exit code 4); a surviving trusted member re-signs it with `ecc set`.
 
 Trust-list backup (`trust publish` / `trust recover`). Each client may publish its own trust view — trusted identities plus revocation envelopes — HPKE-sealed to its own KEM key and signed, at `trust-lists/<own-fingerprint>.json`, and rebuild a lost local store from it. Only the owner opens it, so the trust graph stays hidden from storage observers and ex-members, and recovery needs no prior trust. A hostile repository can withhold or roll the record back but can neither read nor alter it. Recovery restores past human decisions, never makes new ones: the out-of-band fingerprint checks from when each member was added are preserved, not repeated. A stale record misses recent additions (safe direction: unknown signers fail closed) and recent revocations (unsafe direction), so `recover` prints the export time, re-publish is due after every trust change, and revocations are re-confirmed with the team. Heads still re-learn on the next verify (§9).
+
+Both trust exports and offline recovery bundles enumerate revocations independently of active trusted keys: removing a key must not omit its retained tombstone. Recovery validates the complete trust view and all revocation signatures before granting any trust, and persists tombstones before grants. An invalid record, unavailable revocation signer key, or failed tombstone write must not leave a revoked member newly authorized after a failed import.
 
 Offline recovery bundle (`recovery export` / `import`). One password-encrypted file holding the identity (public file plus the still-sealed private file) and the trust view — everything client-side that decryption needs. Export copies sealed bytes and never unlocks keys; import proves both passwords by unlocking the bundle and then the restored private key (the double confirm). The bundle deliberately carries no head records (§9): a recovered client restarts with no rollback history and re-learns heads on the next verify or backup, so snapshots deleted while the client was wiped are undetectable — treat the first post-recovery verify as trust-on-first-use and re-confirm repository contents out of band when that matters. Store the bundle off-machine with the password in your manager; it never belongs in the repository.
 
@@ -392,6 +398,8 @@ type Repository interface {
 
 Implementations: `LocalRepository`, `S3Repository` (via `aws-sdk-go-v2`). A repository is addressed as a local path or `s3:<bucket>[/<prefix>]`. A write is durable before it is reported as done: `LocalRepository` writes a temporary file, `fsync`s it, renames it into place, and `fsync`s the directory; an S3 `PUT` is atomic, and an interrupted multipart upload is aborted.
 
+Every local object operation and directory traversal uses an `os.Root` capability retained when the repository is opened. Replacing the selected root pathname later does not redirect operations. Lexical key validation alone is insufficient: repository-controlled parent or leaf symlinks must not redirect reads, writes, conditional creation, deletion, or directory syncing outside that root. Closing a local repository releases its retained capability; unattended job attempts close it after use, including failed authentication.
+
 ```text
 repository/
 ├── config/repository.json        # signed envelope: repository_id, crypto suite, chunker + pack + default ECC parameters
@@ -456,6 +464,8 @@ The manifest is a JSON document. Its `snapshot_id` is **not** a field inside it;
 
 **Rollback and truncation.** A chain alone cannot reveal that the newest snapshots were deleted, because what remains is still a valid chain. Each client therefore keeps a **head record** per source and repository in its local state (`$XDG_STATE_HOME/petravault/heads/<repository_id>.json`), updated after every backup and verify. `verify` and `restore` fail if a recorded head is missing or is neither the current tip of its chain nor one of its ancestors. A client with no record (first use of a repository, or a client restored from a recovery bundle, which deliberately carries no head records) can only check the chain's internal consistency and says so. A record is reset only by explicit operator action, never automatically, and prune never removes the most recent snapshot of any source (§11.3).
 
+Whole-repository verification checks every recorded source, including sources whose entire snapshot set has disappeared. Before committing a backup, parent selection must establish continuity with the source's recorded head, even with `--no-verify`. Head read-modify-write operations are serialized by an exclusive client-local `<heads-file>.lock` directory, and advancement compares against the records used for history validation, so a concurrent newer observation cannot be overwritten by a stale operation. Contention fails safely and may be retried. A crashed writer may leave the lock directory; remove that directory only after confirming no head writer remains, without deleting or resetting the head records themselves.
+
 ### Verification modes
 
 | Mode | Command | Checks |
@@ -480,6 +490,8 @@ verify parent/history (within its source's chain) → read chunks → verify AEA
 ```
 
 **Restore safety.** A verified manifest is still treated as untrusted input to the filesystem. Restore rejects absolute paths and any `..` component, never follows a symlink out of the destination (including symlinks created earlier in the same restore), writes each file under a temporary name and renames it into place, and refuses to overwrite existing files unless `--overwrite` is given. Ownership is restored only when running as root, setuid/setgid bits are not restored, and decompression is capped at the repository's maximum chunk size so a crafted blob cannot expand without bound.
+
+Symlink targets are resolved component by component against the proposed link graph and existing destination links before creation; lexical cleaning is not a safety check. Safe nested relative targets remain supported. Cyclic or escaping link graphs, manifest entries below symlink ancestors, and existing destination symlink ancestors are rejected.
 
 ### Atomic commit
 
@@ -583,6 +595,8 @@ petravault prune --keep-daily 30 --keep-weekly 12 --keep-monthly 12 --dry-run
 ```
 
 Pruning computes `unreferenced = all_chunks − chunks_referenced_by_retained_snapshots`. Retention keeps the newest snapshot of every source plus the newest snapshot per UTC day/week/month for the last N distinct buckets per source. Packs whose chunks are all unreferenced are deleted together with their parity sidecars. Packs that are mostly unreferenced are **repacked** (rewritten without the dead chunks, with fresh parity) once their unused fraction reaches 50%; a chunk cannot be deleted individually from a pack. Prune also compacts index files and removes orphans from failed backups. Prune refuses to run without at least one keep rule, and always keeps the most recent snapshot of every source (§9). It takes the maintenance lock and waits out or aborts on in-flight backups (§10.2), and `--dry-run` previews everything without taking the lock or changing the repository.
+
+Pack entries used to select surviving copies or rebuild an index authenticate every chunk blob, not merely the encrypted header and unkeyed content address, before maintenance can replace indexes or delete other copies.
 
 ---
 

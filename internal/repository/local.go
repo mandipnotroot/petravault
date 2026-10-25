@@ -5,6 +5,8 @@ package repository
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -31,23 +33,53 @@ var layoutDirs = []string{
 // sit on a NAS shared by several machines, so cross-machine coordination
 // uses lock objects (PutObjectIfAbsent), never local flock (DESIGN.md §10.2).
 type Local struct {
-	root string
+	root    string
+	dir     *os.Root
+	openErr error
 }
 
 // NewLocal opens the repository at root, which must already exist (see Init).
+// Close releases the retained directory capability when no longer needed.
 func NewLocal(root string) *Local {
-	return &Local{root: root}
+	dir, err := os.OpenRoot(root)
+	return &Local{root: root, dir: dir, openErr: err}
+}
+
+// Close releases the repository's directory capability. Already-open object
+// readers retain their own handles and may still be closed independently.
+func (l *Local) Close() error {
+	if l.dir == nil {
+		return nil
+	}
+	return l.dir.Close()
+}
+
+func (l *Local) openRoot() (*os.Root, error) {
+	if l.openErr != nil {
+		return nil, l.openErr
+	}
+	// Duplicate the retained capability, never resolve the selected path
+	// again: its parent may also live on attacker-controlled storage.
+	return l.dir.OpenRoot(".")
 }
 
 // Init creates the repository layout at root and returns it. It is
 // idempotent: running it twice keeps the existing repository.
 func Init(root string) (*Local, error) {
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return nil, fmt.Errorf("create repository: %w", err)
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
 	for _, dir := range layoutDirs {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o750); err != nil {
+		if err := r.MkdirAll(dir, 0o750); err != nil {
+			_ = r.Close()
 			return nil, fmt.Errorf("create %s: %w", dir, err)
 		}
 	}
-	return NewLocal(root), nil
+	return &Local{root: root, dir: r}, nil
 }
 
 // Root returns the repository directory.
@@ -62,10 +94,15 @@ func (l *Local) PutObject(_ context.Context, key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+	root, err := l.openRoot()
+	if err != nil {
+		return fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create parent: %w", err)
 	}
-	return writeDurable(filepath.Dir(path), filepath.Base(path), r)
+	return writeRootDurable(root, path, r)
 }
 
 // PutObjectIfAbsent implements Repository. O_EXCL creation is the
@@ -79,15 +116,20 @@ func (l *Local) PutObjectIfAbsent(_ context.Context, key string, r io.Reader) (b
 	if err != nil {
 		return false, err
 	}
+	root, err := l.openRoot()
+	if err != nil {
+		return false, fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := root.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("create parent: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	tmp, tmpName, err := createRootTemp(root, path)
 	if err != nil {
 		return false, fmt.Errorf("create temp for %s: %w", key, err)
 	}
-	tmpName := tmp.Name()
+	defer tmp.Close()
 	// On any failure before install, remove the temp file. After a
 	// successful link the temp path is unlinked separately.
 	writeErr := func() error {
@@ -103,20 +145,20 @@ func (l *Local) PutObjectIfAbsent(_ context.Context, key string, r io.Reader) (b
 		return nil
 	}()
 	if writeErr != nil {
-		_ = os.Remove(tmpName)
+		_ = root.Remove(tmpName)
 		return false, writeErr
 	}
 	// Link installs the temp content at the target atomically and fails
 	// when the target already exists, which is the compare-and-swap.
-	if err := os.Link(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
+	if err := root.Link(tmpName, path); err != nil {
+		_ = root.Remove(tmpName)
 		if errors.Is(err, fs.ErrExist) {
 			return false, nil
 		}
 		return false, fmt.Errorf("install %s: %w", key, err)
 	}
-	_ = os.Remove(tmpName)
-	if err := syncDir(dir); err != nil {
+	_ = root.Remove(tmpName)
+	if err := syncRootDir(root, dir); err != nil {
 		return false, fmt.Errorf("sync dir for %s: %w", key, err)
 	}
 	return true, nil
@@ -128,7 +170,12 @@ func (l *Local) GetObject(_ context.Context, key string) (io.ReadCloser, error) 
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	root, err := l.openRoot()
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	f, err := root.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", key, err)
 	}
@@ -144,7 +191,12 @@ func (l *Local) GetRange(_ context.Context, key string, offset, length int64) (i
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	root, err := l.openRoot()
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	f, err := root.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", key, err)
 	}
@@ -161,7 +213,12 @@ func (l *Local) DeleteObject(_ context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	root, err := l.openRoot()
+	if err != nil {
+		return fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	if err := root.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete %s: %w", key, err)
 	}
 	return nil
@@ -173,7 +230,12 @@ func (l *Local) Exists(_ context.Context, key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = os.Stat(path)
+	root, err := l.openRoot()
+	if err != nil {
+		return false, fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	_, err = root.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -186,19 +248,19 @@ func (l *Local) Exists(_ context.Context, key string) (bool, error) {
 // List implements Repository. Names use "/" separators and are sorted.
 func (l *Local) List(_ context.Context, prefix string) ([]string, error) {
 	var out []string
-	root := l.root
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	root, err := l.openRoot()
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
+	defer root.Close()
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
+		name := path
 		// Crash leftovers from durable writes (<name>.tmp-*) live in the
 		// same directory; they are never repository objects.
 		if strings.Contains(name, ".tmp-") {
@@ -222,18 +284,30 @@ func (l *Local) resolve(key string) (string, error) {
 	if key == "" || key == "." || !filepath.IsLocal(key) {
 		return "", fmt.Errorf("invalid object key %q", key)
 	}
-	return filepath.Join(l.root, filepath.FromSlash(key)), nil
+	return filepath.FromSlash(key), nil
 }
 
-func writeDurable(dir, name string, r io.Reader) (err error) {
-	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+// createRootTemp creates an unpredictable exclusive sibling without resolving
+// any repository-controlled path outside root.
+func createRootTemp(root *os.Root, path string) (*os.File, string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return nil, "", err
+	}
+	name := path + ".tmp-" + hex.EncodeToString(random[:])
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	return f, name, err
+}
+
+func writeRootDurable(root *os.Root, path string, r io.Reader) (err error) {
+	tmp, name, err := createRootTemp(root, path)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
 	defer func() {
+		_ = tmp.Close()
 		if err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
+			_ = root.Remove(name)
 		}
 	}()
 	if _, err = io.Copy(tmp, r); err != nil {
@@ -245,14 +319,14 @@ func writeDurable(dir, name string, r io.Reader) (err error) {
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
 	}
-	if err = os.Rename(tmp.Name(), filepath.Join(dir, name)); err != nil {
+	if err = root.Rename(name, path); err != nil {
 		return fmt.Errorf("rename: %w", err)
 	}
-	return syncDir(dir)
+	return syncRootDir(root, filepath.Dir(path))
 }
 
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
+func syncRootDir(root *os.Root, dir string) error {
+	d, err := root.Open(dir)
 	if err != nil {
 		return err
 	}

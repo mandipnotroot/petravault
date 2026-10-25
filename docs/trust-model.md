@@ -85,6 +85,11 @@ opens the seal, and restores both, so a wiped client comes back without
 repeating every fingerprint check. It reports the snapshot's age:
 re-publish after every trust change, re-confirm revocations with the team
 when it looks old, and let the next `verify` re-learn heads.
+Exports include tombstones even after their target is removed from active
+trust. Both recovery paths validate all identities and revocations before
+granting authority, then write revocations before trusted keys. In particular,
+an unavailable historical revocation signer causes a fail-closed import, not
+a partial trust grant that omits the disqualification.
 
 ## Member roster
 

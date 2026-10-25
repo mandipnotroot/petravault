@@ -37,6 +37,9 @@ doubles as the object name.
 `Rename`, then directory `Sync`. `PutObjectIfAbsent` uses `O_EXCL` as the
 compare-and-swap for locks. `GetRange` seeks and reads exactly the
 requested span. Addressed as a filesystem path; `Init` is idempotent.
+All object operations and traversal are relative to a retained `os.Root`
+capability; neither repository-controlled symlinks nor replacement of the
+selected root pathname can redirect them. `Local.Close` releases that capability.
 
 ## S3 backend
 
@@ -100,6 +103,9 @@ petravault ecc rebuild                    # re-protect existing objects (reads e
 into fresh parity — and writes the new sidecar before replacing the old one.
 Rebuilding to `off` removes sidecars. It takes `gc.lock` (no prune overlap)
 while backups keep running; on S3 it needs maintenance credentials.
+Because rebuild changes sidecars only, it refuses any object whose verified
+in-memory repair differs from its stored bytes, preserving the old sidecar
+until the durable ciphertext is repaired separately. This also applies to `off`.
 
 Repair: checksum-failed shards become known erasures, are reconstructed,
 and the result is re-verified by AEAD. Beyond-budget damage is reported as
@@ -132,6 +138,8 @@ sidecars; packs ≥ 50% dead are repacked under the current pack/ECC settings;
 indexes are compacted; orphans from failed backups are removed. Prune
 refuses to run without at least one keep rule and never removes the newest
 snapshot of any source. `--dry-run` previews without the lock or changes.
+Surviving pack entries authenticate all chunk blobs before authorizing index
+replacement or deletion; a genuine header alone does not prove blob integrity.
 
 ## Repository config
 

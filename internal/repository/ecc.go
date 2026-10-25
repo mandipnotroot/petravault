@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"petravault/internal/erasure"
+	pverrors "petravault/internal/errors"
 )
 
 // Object prefixes carrying parity sidecars (DESIGN.md §8). The literals match
@@ -144,6 +145,11 @@ func rebuildOne(ctx context.Context, repo Repository, objectKey string, params e
 	}
 	if err := verify(objectKey, repaired); err != nil {
 		return fmt.Errorf("rebuild %s: refusing to encode unverified data: %w", objectKey, err)
+	}
+	// Rebuild changes sidecars only. An in-memory repair does not make the
+	// durable ciphertext independent of its old recovery material.
+	if !bytes.Equal(stored, repaired) {
+		return fmt.Errorf("%w: rebuild %s: stored object requires repair; preserving its sidecar", pverrors.ErrIntegrity, objectKey)
 	}
 	if params.Off {
 		if err := repo.DeleteObject(ctx, sidecarKey); err != nil {

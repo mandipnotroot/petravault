@@ -356,11 +356,13 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 	// sources would ratchet them backward to a truncated tip without
 	// comparison.
 	checked := tips
-	if opts.HeadsPath != "" && len(tips) > 0 {
+	var expectedHeads map[string]Head
+	if opts.HeadsPath != "" {
 		heads, err := LoadHeads(opts.HeadsPath)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
+			expectedHeads = heads
 			bySource := groupBySource(manifests)
 			sourcesToCheck := tips
 			if only != "" {
@@ -374,6 +376,16 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 				}
 			}
 			checked = sourcesToCheck
+			// A source absent from the current listing is precisely the
+			// complete-truncation case; do not let storage choose which
+			// persistent records are checked in a whole-repository run.
+			if only == "" {
+				for source, recorded := range heads {
+					if _, ok := tips[source]; !ok {
+						errs = append(errs, fmt.Errorf("%w: source %q head %s is missing: all snapshots were deleted", pverrors.ErrRollback, source, recorded.Snapshot))
+					}
+				}
+			}
 			for source, tip := range sourcesToCheck {
 				recorded, ok := heads[source]
 				if !ok {
@@ -403,7 +415,7 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 				toUpdate[source] = tip
 			}
 		}
-		if err := UpdateTips(opts.HeadsPath, toUpdate, nil); err != nil {
+		if err := CompareAndUpdateTips(opts.HeadsPath, toUpdate, expectedHeads, nil); err != nil {
 			return report, err
 		}
 	}

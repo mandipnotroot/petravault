@@ -252,7 +252,7 @@ func ListPack(ctx context.Context, repo repository.Repository, repoID string, da
 	return parsePack(content, repoID, dataKey, packKey)
 }
 
-// ListPackEntries verifies a pack header and returns index entries with
+// ListPackEntries authenticates a pack and returns index entries with
 // absolute blob offsets, so prune can rebuild indexes for kept packs
 // without trusting stored index offsets. Structural damage is reported;
 // authentication failures wrap ErrIntegrity.
@@ -261,7 +261,10 @@ func ListPackEntries(ctx context.Context, repo repository.Repository, repoID str
 	if err != nil {
 		return nil, err
 	}
-	if err := checkContentKey(packKey, PackPrefix, content); err != nil {
+	// A genuine header can be copied onto corrupt blobs and the unkeyed
+	// object hash recomputed. Maintenance must authenticate the survivors
+	// before relying on them to delete other copies.
+	if err := VerifyPack(content, repoID, dataKey, packKey); err != nil {
 		return nil, err
 	}
 	refs, err := parsePack(content, repoID, dataKey, packKey)

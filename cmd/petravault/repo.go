@@ -63,6 +63,12 @@ func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
+	verified := false
+	defer func() {
+		if !verified {
+			closeLocalRepo(repo)
+		}
+	}()
 	trust := identity.NewTrustStore(trustDir())
 	trusted, err := listTrustedSigners(trust)
 	if err != nil {
@@ -75,7 +81,14 @@ func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (
 	if err := requireTrustedConfigSigner(trust, signer); err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
+	verified = true
 	return repo, repoCfg, trust, trusted, nil
+}
+
+func closeLocalRepo(repo repository.Repository) {
+	if local, ok := repo.(*repository.Local); ok {
+		_ = local.Close() // releasing a directory capability; no buffered writes
+	}
 }
 
 // requireTrustedConfigSigner refuses a repository config whose signer is
@@ -243,7 +256,8 @@ func manifestToBackup(files []manifest.File) []backup.FileEntry {
 // (empty for the first backup), its entries for the fast path, and its
 // creation time for the racily-clean guard. A forked chain is an integrity
 // failure, never a silent pick of a winner.
-func parentForSource(ctx context.Context, repo repository.Repository, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte) (string, []backup.FileEntry, time.Time, error) {
+func parentForSource(ctx context.Context, repo repository.Repository, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte, recordedHead string) (string, []backup.FileEntry, time.Time, error) {
+	recordedHead = strings.ToLower(strings.TrimSpace(recordedHead))
 	ids, err := manifest.List(ctx, repo)
 	if err != nil {
 		return "", nil, time.Time{}, err
@@ -268,6 +282,9 @@ func parentForSource(ctx context.Context, repo repository.Repository, repoID, so
 		owned = append(owned, candidate{id: id, m: m})
 	}
 	if len(owned) == 0 {
+		if recordedHead != "" {
+			return "", nil, time.Time{}, fmt.Errorf("%w: source %q recorded head is missing", pverrors.ErrRollback, sourceID)
+		}
 		return "", nil, time.Time{}, nil
 	}
 	byID := make(map[string]candidate, len(owned))
@@ -307,6 +324,24 @@ func parentForSource(ctx context.Context, repo repository.Repository, repoID, so
 		return "", nil, time.Time{}, fmt.Errorf("%w: source %q has %d tips, want 1", pverrors.ErrIntegrity, sourceID, len(tips))
 	}
 	tip := byID[tips[0]]
+	if recordedHead != "" {
+		found := false
+		id := tip.id
+		for range len(byID) {
+			if id == recordedHead {
+				found = true
+				break
+			}
+			parent, ok := byID[id]
+			if !ok {
+				break
+			}
+			id = strings.ToLower(strings.TrimSpace(parent.m.Parent))
+		}
+		if !found {
+			return "", nil, time.Time{}, fmt.Errorf("%w: source %q recorded head is missing or is not an ancestor of its tip", pverrors.ErrRollback, sourceID)
+		}
+	}
 	return tip.id, manifestToBackup(tip.m.Files), tip.m.CreatedAt, nil
 }
 

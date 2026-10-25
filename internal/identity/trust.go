@@ -197,3 +197,34 @@ func (t *TrustStore) RevocationEnvelope(fp Fingerprint) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// RevocationEnvelopes returns every retained tombstone, including those whose
+// targets have been removed from active trust. Filename order is deterministic.
+func (t *TrustStore) RevocationEnvelopes() ([][]byte, error) {
+	entries, err := os.ReadDir(filepath.Join(t.dir, revokedDirName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list revocations: %w", err)
+	}
+	var out [][]byte
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			return nil, fmt.Errorf("%w: unexpected revocation entry %q", pverrors.ErrIntegrity, entry.Name())
+		}
+		raw, err := os.ReadFile(filepath.Join(t.dir, revokedDirName, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read revocation: %w", err)
+		}
+		rev, err := decodeRevocationEnvelope(raw)
+		if err != nil {
+			return nil, err
+		}
+		if entry.Name() != rev.Fingerprint.String()+".rev" {
+			return nil, fmt.Errorf("%w: revocation filename does not match its target", pverrors.ErrIntegrity)
+		}
+		out = append(out, raw)
+	}
+	return out, nil
+}

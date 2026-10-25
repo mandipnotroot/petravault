@@ -59,6 +59,14 @@ func executeBackup(ctx context.Context, repo repository.Repository, repoCfg repo
 	if err != nil {
 		return outcome, err
 	}
+	headsPath, err := headsPathForRepo(repoCfg.RepositoryID)
+	if err != nil {
+		return outcome, err
+	}
+	heads, err := verify.LoadHeads(headsPath)
+	if err != nil {
+		return outcome, err
+	}
 	// Lock ordering: write backup-<id>, then check for gc.lock, then read
 	// indexes. If prune holds the lock, remove the marker and retry with
 	// backoff (DESIGN.md §10.2).
@@ -80,7 +88,7 @@ func executeBackup(ctx context.Context, repo repository.Repository, repoCfg repo
 	}()
 	sub := master.DeriveSubkeys()
 	defer sub.Zero()
-	parentID, parentFiles, parentStart, err := parentForSource(ctx, repo, repoCfg.RepositoryID, sid, sub.Data, trust, trusted)
+	parentID, parentFiles, parentStart, err := parentForSource(ctx, repo, repoCfg.RepositoryID, sid, sub.Data, trust, trusted, heads[sid].Snapshot)
 	if err != nil {
 		return outcome, err
 	}
@@ -117,11 +125,7 @@ func executeBackup(ctx context.Context, repo repository.Repository, repoCfg repo
 	if err != nil {
 		return outcome, err
 	}
-	headsPath, err := headsPathForRepo(repoCfg.RepositoryID)
-	if err != nil {
-		return outcome, err
-	}
-	if err := verify.UpdateHead(headsPath, sid, snapshotID, nil); err != nil {
+	if err := verify.CompareAndUpdateTips(headsPath, map[string]string{sid: snapshotID}, heads, nil); err != nil {
 		return outcome, err
 	}
 	logger.InfoContext(ctx, "backup committed",

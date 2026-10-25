@@ -25,6 +25,13 @@ func Open(path string) (*os.File, error) {
 	return openNoFollow(path)
 }
 
+// OpenInRoot opens a source path under a retained directory capability.
+// Unix opens are nonblocking and refuse a trailing symlink; callers must
+// check the opened descriptor's type and identity before reading it.
+func OpenInRoot(root *os.Root, path string) (*os.File, error) {
+	return openRootNoFollow(root, path)
+}
+
 // ReadFile opens path without following symlinks and reads at most
 // maxBytes+1 bytes, reporting how many were read so callers can enforce
 // their own size cap without a separate stat-then-read race.

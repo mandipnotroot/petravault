@@ -128,6 +128,22 @@ func Restore(ctx context.Context, repo repository.Repository, repoID string, dat
 		}
 		seen[osPath] = f.Path
 	}
+	destinationLink := func(name string) (string, error) {
+		info, err := root.Lstat(filepath.FromSlash(name))
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return "", nil
+		}
+		return root.Readlink(filepath.FromSlash(name))
+	}
+	if err := manifest.ValidateSymlinkTargets(selected, destinationLink); err != nil {
+		return err
+	}
 	// Create directories first so parents exist before files.
 	for _, f := range selected {
 		if f.Type != manifest.TypeDir {
@@ -142,6 +158,7 @@ func Restore(ctx context.Context, repo repository.Repository, repoID string, dat
 	// run must never redirect a file write, even though os.Root already
 	// confines everything to the destination.
 	restored := 0
+	var installedLinks []manifest.File
 	for _, pass := range []string{manifest.TypeFile, manifest.TypeSymlink} {
 		for _, f := range selected {
 			if f.Type != pass {
@@ -152,6 +169,12 @@ func Restore(ctx context.Context, repo repository.Repository, repoID string, dat
 			}
 			switch f.Type {
 			case manifest.TypeSymlink:
+				// Do not assume a later link will be installed: a failure
+				// there must not leave an earlier escaping link behind.
+				installedLinks = append(installedLinks, f)
+				if err := manifest.ValidateSymlinkTargets(installedLinks, destinationLink); err != nil {
+					return err
+				}
 				if err := restoreSymlink(root, f, opts.Overwrite); err != nil {
 					return err
 				}

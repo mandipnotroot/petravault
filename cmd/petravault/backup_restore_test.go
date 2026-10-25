@@ -4,10 +4,13 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	pverrors "petravault/internal/errors"
 )
 
 func writeSrcFile(t *testing.T, dir, name, data string) {
@@ -124,6 +127,43 @@ func TestBackupVerifyAfterBackupFlags(t *testing.T) {
 	}
 	if err := runCmdErr(t, "--repository", repo, "backup", src, "--verify", "--no-verify"); err == nil {
 		t.Fatal("backup with both --verify and --no-verify succeeded")
+	}
+}
+
+func TestBackupDoesNotResetDeletedHead(t *testing.T) {
+	for _, deleteAll := range []bool{false, true} {
+		name := "deleted-tip"
+		if deleteAll {
+			name = "deleted-entire-source"
+		}
+		t.Run(name, func(t *testing.T) {
+			isolatedIdentityEnv(t, "test-password")
+			out, _ := runCmd(t, "identity", "create", "--name", "alice")
+			fp := fingerprintFromCreate(t, out)
+			repo := filepath.Join(t.TempDir(), "repo")
+			runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+			src := t.TempDir()
+			writeSrcFile(t, src, "dummy.txt", "v1")
+			out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off")
+			first := snapshotFromBackup(t, out)
+			writeSrcFile(t, src, "dummy.txt", "v2")
+			out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off")
+			second := snapshotFromBackup(t, out)
+			if err := os.Remove(filepath.Join(repo, "snapshots", second)); err != nil {
+				t.Fatal(err)
+			}
+			if deleteAll {
+				if err := os.Remove(filepath.Join(repo, "snapshots", first)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, flag := range []string{"--verify", "--no-verify"} {
+				err := runCmdErr(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off", flag)
+				if !errors.Is(err, pverrors.ErrRollback) {
+					t.Fatalf("backup %s after deletion: %v, want rollback rejection", flag, err)
+				}
+			}
+		})
 	}
 }
 

@@ -20,3 +20,7 @@ func openNoFollow(path string) (*os.File, error) {
 	}
 	return f, nil
 }
+
+func openRootNoFollow(root *os.Root, path string) (*os.File, error) {
+	return root.Open(path)
+}
