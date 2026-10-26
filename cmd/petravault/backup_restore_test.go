@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,6 +34,49 @@ func snapshotFromBackup(t *testing.T, output string) string {
 	}
 	t.Fatalf("no snapshot in output %q", output)
 	return ""
+}
+
+func TestSnapshotTerminalSourceAndPathAreQuoted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain terminal control characters")
+	}
+	isolatedIdentityEnv(t, "test-password")
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fileName := "\x1b[2J\nforged.txt"
+	if err := os.WriteFile(filepath.Join(src, fileName), []byte("dummy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceID := "laptop\x1b[2J\nforged-source"
+	out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", sourceID, "--ecc", "off", "--no-verify")
+	snapshotID := snapshotFromBackup(t, out)
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-source") {
+		t.Fatalf("backup emitted raw source metadata: %q", out)
+	}
+	if !strings.Contains(out, `source: "laptop\x1b[2J\nforged-source"`) {
+		t.Fatalf("backup did not quote the source ID: %q", out)
+	}
+
+	for _, args := range [][]string{
+		{"--repository", repo, "snapshots", "list"},
+		{"--repository", repo, "snapshots", "show", snapshotID},
+		{"--repository", repo, "verify"},
+	} {
+		out, _ = runCmd(t, args...)
+		if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-source") || strings.Contains(out, "\nforged.txt") {
+			t.Fatalf("%v emitted raw snapshot metadata: %q", args, out)
+		}
+		if !strings.Contains(out, `\x1b[2J\n`) {
+			t.Fatalf("%v did not quote terminal metadata: %q", args, out)
+		}
+	}
 }
 
 func TestBackupVerifyRestoreRoundTrip(t *testing.T) {

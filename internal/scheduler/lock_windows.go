@@ -36,16 +36,27 @@ func TryLock(stateDir, name string) (*JobLock, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create schedule state dir: %w", err)
 	}
+	if err := checkScheduleDirectory(stateDir); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
+		if ownerErr := checkScheduleFileOwner(f, path); ownerErr != nil {
+			_ = f.Close()
+			_ = os.Remove(path)
+			return nil, ownerErr
+		}
 		return &JobLock{path: path, file: f}, nil
 	}
 	if !errors.Is(err, fs.ErrExist) {
 		return nil, fmt.Errorf("open job lock: %w", err)
 	}
-	fi, statErr := os.Stat(path)
+	fi, statErr := os.Lstat(path)
 	if statErr != nil {
 		return nil, fmt.Errorf("%w: %s", ErrLocked, name)
+	}
+	if err := checkScheduleDirectoryOwner(path, fi); err != nil {
+		return nil, err
 	}
 	if time.Since(fi.ModTime()) < lockTTL {
 		return nil, fmt.Errorf("%w: %s", ErrLocked, name)
@@ -56,6 +67,11 @@ func TryLock(stateDir, name string) (*JobLock, error) {
 	f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrLocked, name)
+	}
+	if err := checkScheduleFileOwner(f, path); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return nil, err
 	}
 	return &JobLock{path: path, file: f}, nil
 }

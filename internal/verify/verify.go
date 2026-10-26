@@ -16,7 +16,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -186,7 +185,10 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 				merged[e.ID] = e
 			}
 		}
-		if warn := checkSidecar(ctx, repo, key, sealed); warn != "" {
+		warn, sidecarErr := checkSidecar(ctx, repo, key, sealed)
+		if sidecarErr != nil {
+			errs = append(errs, sidecarErr)
+		} else if warn != "" {
 			report.Warnings = append(report.Warnings, warn)
 		} else if opts.Deep {
 			if err := checkParity(ctx, repo, key, sealed); err != nil {
@@ -224,7 +226,10 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 			continue
 		}
 		manifests[hexID] = m
-		if warn := checkSidecar(ctx, repo, manifest.SnapshotPrefix+hexID, sealed); warn != "" {
+		warn, sidecarErr := checkSidecar(ctx, repo, manifest.SnapshotPrefix+hexID, sealed)
+		if sidecarErr != nil {
+			errs = append(errs, sidecarErr)
+		} else if warn != "" {
 			report.Warnings = append(report.Warnings, warn)
 		} else if opts.Deep {
 			if err := checkParity(ctx, repo, manifest.SnapshotPrefix+hexID, sealed); err != nil {
@@ -448,16 +453,7 @@ func filterECC(keys []string) []string {
 }
 
 func readObject(ctx context.Context, repo repository.Repository, key string) ([]byte, error) {
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	defer r.Close()
-	raw, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	return raw, nil
+	return repository.ReadObject(ctx, repo, key)
 }
 
 // verifySlot checks one key-slot envelope against the client-local trust
@@ -472,12 +468,7 @@ func verifySlot(ctx context.Context, repo repository.Repository, key, wantRepo s
 	if err != nil {
 		return err
 	}
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", key, err)
-	}
-	defer r.Close()
-	env, err := io.ReadAll(r)
+	env, err := repository.ReadObject(ctx, repo, key)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", key, err)
 	}
@@ -546,34 +537,29 @@ func openTrustedSnapshot(ctx context.Context, repo repository.Repository, repoCf
 // crash, and objects intentionally written with --ecc off legitimately
 // have none, so absence is reported, never silently ignored, but does not
 // fail standard verification.
-func checkSidecar(ctx context.Context, repo repository.Repository, objectKey string, objectBytes []byte) string {
+func checkSidecar(ctx context.Context, repo repository.Repository, objectKey string, objectBytes []byte) (string, error) {
 	exists, err := repo.Exists(ctx, erasure.SidecarKey(objectKey))
 	if err != nil {
-		return "sidecar check failed for " + objectKey + ": " + err.Error()
+		return "sidecar check failed for " + objectKey + ": " + err.Error(), nil
 	}
 	if !exists {
-		return "missing sidecar for " + objectKey
+		return "missing sidecar for " + objectKey, nil
 	}
-	r, err := repo.GetObject(ctx, erasure.SidecarKey(objectKey))
+	raw, err := repository.ReadObject(ctx, repo, erasure.SidecarKey(objectKey))
 	if err != nil {
-		return "unreadable sidecar for " + objectKey + ": " + err.Error()
-	}
-	defer r.Close()
-	// Sidecars hold parity shards proportional to the object; cap the read
-	// so a hostile repository cannot OOM the verifier (deep parity checks
-	// re-read and fully validate below).
-	raw, err := io.ReadAll(io.LimitReader(r, 1<<28))
-	if err != nil {
-		return "unreadable sidecar for " + objectKey + ": " + err.Error()
+		if errors.Is(err, pverrors.ErrIntegrity) {
+			return "", err
+		}
+		return "unreadable sidecar for " + objectKey + ": " + err.Error(), nil
 	}
 	sc, err := erasure.Decode(raw)
 	if err != nil {
-		return "corrupt sidecar for " + objectKey + ": " + err.Error()
+		return "corrupt sidecar for " + objectKey + ": " + err.Error(), nil
 	}
 	if sc.DataLength != len(objectBytes) {
-		return "sidecar length mismatch for " + objectKey
+		return "sidecar length mismatch for " + objectKey, nil
 	}
-	return ""
+	return "", nil
 }
 
 // checkParity runs the ECC parity check for one object that has a sidecar.
@@ -590,12 +576,7 @@ func checkParity(ctx context.Context, repo repository.Repository, objectKey stri
 	if !exists {
 		return nil
 	}
-	r, err := repo.GetObject(ctx, erasure.SidecarKey(objectKey))
-	if err != nil {
-		return fmt.Errorf("read sidecar for %s: %w", objectKey, err)
-	}
-	defer r.Close()
-	raw, err := io.ReadAll(r)
+	raw, err := repository.ReadObject(ctx, repo, erasure.SidecarKey(objectKey))
 	if err != nil {
 		return fmt.Errorf("read sidecar for %s: %w", objectKey, err)
 	}

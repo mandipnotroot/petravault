@@ -16,7 +16,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"slices"
 	"strings"
@@ -546,20 +545,8 @@ func parsePack(content []byte, repoID string, dataKey crypto.SecretKey, packKey 
 
 // readAll reads a whole object or one byte range into memory.
 func readAll(ctx context.Context, repo repository.Repository, key string, offset, length int64) ([]byte, error) {
-	open := func() (io.ReadCloser, error) {
-		if offset < 0 {
-			return repo.GetObject(ctx, key)
-		}
-		return repo.GetRange(ctx, key, offset, length)
+	if offset < 0 {
+		return repository.ReadObject(ctx, repo, key)
 	}
-	r, err := open()
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	defer r.Close()
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	return buf.Bytes(), nil
+	return repository.ReadRange(ctx, repo, key, offset, length)
 }

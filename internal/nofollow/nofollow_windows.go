@@ -16,7 +16,7 @@ import (
 func openNoFollow(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return nil, fmt.Errorf("nofollow open %s: %w", path, err)
+		return nil, fmt.Errorf("nofollow open %q: %w", path, err)
 	}
 	return f, nil
 }

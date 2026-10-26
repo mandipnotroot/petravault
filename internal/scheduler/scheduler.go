@@ -412,6 +412,9 @@ func LockPath(dir, name string) (string, error) {
 // LoadJob reads and validates one job file. Group/world-readable files and
 // unknown fields are refused (DESIGN.md §11.2, §12).
 func LoadJob(path string) (Job, error) {
+	if err := checkScheduleDirectory(filepath.Dir(path)); err != nil {
+		return Job{}, err
+	}
 	f, err := nofollow.Open(path)
 	if err != nil {
 		return Job{}, fmt.Errorf("read schedule job: %w", err)
@@ -457,6 +460,9 @@ func SaveJob(dir string, job Job) error {
 // directory means no jobs yet. A corrupt job fails the listing rather than
 // being silently skipped.
 func ListJobs(dir string) ([]Job, error) {
+	if err := checkScheduleDirectory(dir); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -487,6 +493,9 @@ func ListJobs(dir string) ([]Job, error) {
 // the caller initializes NextRun via EnsureState. Present files must be
 // mode 0600 like job files.
 func LoadState(path string) (State, error) {
+	if err := checkScheduleDirectory(filepath.Dir(path)); err != nil {
+		return State{}, err
+	}
 	f, err := nofollow.Open(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -770,6 +779,9 @@ func DaemonTick(ctx context.Context, scheduleDir, stateDir string, now time.Time
 // stop every scheduled job. The CLI list command keeps using strict
 // ListJobs to surface corruption to operators.
 func loadJobsTolerant(dir string, logger *slog.Logger) ([]Job, []error) {
+	if err := checkScheduleDirectory(dir); err != nil {
+		return nil, []error{err}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -833,14 +845,35 @@ func checkJobPermissions(f *os.File, path string) error {
 	if fi.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("schedule file %s: permissions %v too open, want 0600", path, fi.Mode().Perm())
 	}
-	return nil
+	return checkScheduleFileOwner(f, path)
+}
+
+func checkScheduleDirectory(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat schedule directory: %w", err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("schedule directory %s is not a directory", path)
+	}
+	if err := checkScheduleDirectoryOwner(path, fi); err != nil {
+		return err
+	}
+	return checkScheduleDirectoryPermissions(path, fi)
 }
 
 func writeDurable(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create schedule dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "schedule-*.tmp")
+	if err := checkScheduleDirectory(dir); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "schedule-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp schedule file: %w", err)
 	}
@@ -861,7 +894,7 @@ func writeDurable(path string, data []byte, perm os.FileMode) error {
 		if err := os.Rename(tmpName, path); err != nil {
 			return fmt.Errorf("install schedule file: %w", err)
 		}
-		return syncScheduleDir(filepath.Dir(path))
+		return syncScheduleDir(dir)
 	}()
 	if writeErr != nil {
 		_ = os.Remove(tmpName)

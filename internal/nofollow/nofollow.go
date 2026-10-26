@@ -3,11 +3,12 @@
 
 // Package nofollow opens secret-adjacent files without following a trailing
 // symlink (DESIGN.md §11.2): password files, schedule job and state files,
-// and exclude files are all checked (permissions, size) and then read, and
+// and exclude files are checked (type, permissions, size) and then read, and
 // a symlink swapped in between the check and the read must not redirect
-// either. On Unix the open refuses trailing symlinks; on Windows, which has
-// no equivalent open flag, it is a plain open and the limitation is
-// documented (the mode-based permission checks do not apply there either).
+// either. Unix opens are nonblocking and reject non-regular files before
+// reading. On Windows, which has no equivalent open flags, it is a plain open
+// followed by a regular-file check; the limitation is documented (the
+// mode-based permission checks do not apply there either).
 package nofollow
 
 import (
@@ -20,9 +21,23 @@ import (
 // exhaust memory; callers pass their own documented cap.
 const maxReadBytes = 8 << 20
 
-// Open opens path for reading. See the platform files for symlink behavior.
+// Open opens path without following a trailing symlink and accepts only a
+// regular file. See the platform files for symlink behavior.
 func Open(path string) (*os.File, error) {
-	return openNoFollow(path)
+	f, err := openNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("nofollow stat %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("nofollow open %q: not a regular file", path)
+	}
+	return f, nil
 }
 
 // OpenInRoot opens a source path under a retained directory capability.
@@ -37,7 +52,7 @@ func OpenInRoot(root *os.Root, path string) (*os.File, error) {
 // their own size cap without a separate stat-then-read race.
 func ReadFile(path string, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 || maxBytes > maxReadBytes {
-		return nil, fmt.Errorf("nofollow read %s: invalid cap %d", path, maxBytes)
+		return nil, fmt.Errorf("nofollow read %q: invalid cap %d", path, maxBytes)
 	}
 	f, err := Open(path)
 	if err != nil {
@@ -46,7 +61,7 @@ func ReadFile(path string, maxBytes int64) ([]byte, error) {
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("nofollow read %s: %w", path, err)
+		return nil, fmt.Errorf("nofollow read %q: %w", path, err)
 	}
 	return raw, nil
 }

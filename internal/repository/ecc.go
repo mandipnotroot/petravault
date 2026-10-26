@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"petravault/internal/erasure"
@@ -168,12 +167,7 @@ func rebuildOne(ctx context.Context, repo Repository, objectKey string, params e
 }
 
 func readKey(ctx context.Context, repo Repository, key string) ([]byte, error) {
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", key, err)
-	}
-	defer r.Close()
-	raw, err := io.ReadAll(r)
+	raw, err := ReadObject(ctx, repo, key)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", key, err)
 	}

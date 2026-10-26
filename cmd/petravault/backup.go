@@ -83,7 +83,7 @@ unless disabled via --no-verify or verify_after_backup=false.`,
 				return backupErr
 			}
 			if outcome.SnapshotID != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "snapshot %s\nsource: %s\nfiles: %d  new_chunks: %d  reused: %d  packs: %d\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "snapshot %s\nsource: %q\nfiles: %d  new_chunks: %d  reused: %d  packs: %d\n",
 					outcome.SnapshotID, sid, outcome.Files, outcome.NewChunks, outcome.Reused, outcome.Packs)
 				for _, w := range outcome.Warnings {
 					fmt.Fprintf(cmd.OutOrStdout(), "warning: %s\n", w)

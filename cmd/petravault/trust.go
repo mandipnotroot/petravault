@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -65,7 +64,7 @@ func newTrustListCmd(f *flags) *cobra.Command {
 				if revoked {
 					marker = "  (revoked)"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s%s\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "%s  %q  %s%s\n",
 					id.Fingerprint.Grouped(), id.Name,
 					id.CreatedAt.Format("2006-01-02T15:04:05Z"), marker)
 			}
@@ -222,12 +221,7 @@ func grantMemberAccess(cmd *cobra.Command, f *flags, cfg config.Config, logger *
 // signed by anyone else is refused (DESIGN.md §4.2, §5.2).
 func openGranterSlot(ctx context.Context, repo repository.Repository, trust *identity.TrustStore, repositoryID string, granterPriv *identity.PrivateIdentity) (crypto.SecretKey, error) {
 	key := identity.SlotKey(granterPriv.Fingerprint())
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return crypto.SecretKey{}, fmt.Errorf("read key slot for %s: %w", granterPriv.Fingerprint().Grouped(), err)
-	}
-	defer r.Close()
-	env, err := io.ReadAll(r)
+	env, err := repository.ReadObject(ctx, repo, key)
 	if err != nil {
 		return crypto.SecretKey{}, fmt.Errorf("read key slot for %s: %w", granterPriv.Fingerprint().Grouped(), err)
 	}
@@ -419,15 +413,10 @@ func newTrustRecoverCmd(f *flags) *cobra.Command {
 				return err
 			}
 			defer priv.Zero()
-			r, err := repo.GetObject(ctx, identity.TrustListKey(owner.Fingerprint))
+			env, err := repository.ReadObject(ctx, repo, identity.TrustListKey(owner.Fingerprint))
 			if err != nil {
 				return fmt.Errorf("read published trust list for %s: %w (publish it first with `trust publish`)",
 					owner.Fingerprint.Grouped(), err)
-			}
-			defer r.Close()
-			env, err := io.ReadAll(r)
-			if err != nil {
-				return fmt.Errorf("read published trust list for %s: %w", owner.Fingerprint.Grouped(), err)
 			}
 			trust := identity.NewTrustStore(trustDir())
 			summary, err := identity.RecoverTrustList(env, priv, trust)
@@ -515,7 +504,7 @@ func listRepoMembers(ctx context.Context, cmd *cobra.Command, repo repository.Re
 		} else if ok, err := trust.IsTrusted(fp); err == nil && ok {
 			status = "trusted"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  slot:%t  %s\n", fp.Grouped(), name, slot, status)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s  %q  slot:%t  %s\n", fp.Grouped(), name, slot, status)
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "approve with: petravault trust sync <fingerprint> (verify it out of band first)")
 	return nil
@@ -547,12 +536,7 @@ func approveRepoMember(ctx context.Context, cmd *cobra.Command, repo repository.
 // fetchRepoMember returns the advisory repo copy for fp, or nil when it is
 // missing or corrupt. Corruption fails the single approval, never the list.
 func fetchRepoMember(ctx context.Context, repo repository.Repository, fp identity.Fingerprint) *identity.Identity {
-	r, err := repo.GetObject(ctx, identity.AdvisoryKey(fp))
-	if err != nil {
-		return nil
-	}
-	defer r.Close()
-	raw, err := io.ReadAll(r)
+	raw, err := repository.ReadObject(ctx, repo, identity.AdvisoryKey(fp))
 	if err != nil {
 		return nil
 	}

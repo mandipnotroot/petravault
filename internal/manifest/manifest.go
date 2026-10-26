@@ -24,7 +24,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"path/filepath"
 	"slices"
@@ -514,12 +513,7 @@ func openWithKey(ctx context.Context, repo repository.Repository, repoID string,
 		return Manifest{}, nil, fmt.Errorf("%w: repository id is empty", pverrors.ErrUsage)
 	}
 	key := SnapshotPrefix + hexID
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return Manifest{}, nil, fmt.Errorf("read snapshot %s: %w", hexID, err)
-	}
-	defer r.Close()
-	envBytes, err := io.ReadAll(r)
+	envBytes, err := repository.ReadObject(ctx, repo, key)
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("read snapshot %s: %w", hexID, err)
 	}

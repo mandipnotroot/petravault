@@ -39,7 +39,25 @@ compare-and-swap for locks. `GetRange` seeks and reads exactly the
 requested span. Addressed as a filesystem path; `Init` is idempotent.
 All object operations and traversal are relative to a retained `os.Root`
 capability; neither repository-controlled symlinks nor replacement of the
-selected root pathname can redirect them. `Local.Close` releases that capability.
+selected root pathname can redirect them. Reads open nonblocking on Unix and
+reject non-regular objects, so a FIFO stored under an object key cannot hang
+the client. `Local.Close` releases that capability.
+
+Whole-object reads are byte-bounded by class and reject limit+1 bytes as an
+integrity failure, never as a successful truncated read; writers refuse
+oversized known-class objects too. Writes under unknown keys are capped at
+1 MiB, and `ReadObject` rejects those classes. Config/small identity
+objects and revocations are limited to 1 MiB, lock records to 64 KiB, rosters
+and trust-list backups to 16 MiB, and each index or snapshot to 256 MiB. A
+chunk range is limited to 1 GiB + 1 MiB compression allowance + 40 bytes of
+AEAD overhead. Packs have an 8 GiB reader ceiling, preserving the supported
+1 GiB pack target and 1 GiB maximum chunk with conservative room for the
+encrypted header; this ceiling is not a recommended pack size. Pack sidecars
+are capped at 11 GiB and index/snapshot sidecars at 384 MiB for the maximum
+100% parity setting and JSON base64 expansion. Unknown object classes and
+oversize data fail closed with `ErrIntegrity` (exit code 4). S3 still buffers
+accepted objects fully in memory, so use the default ~16 MiB pack size unless
+the machine has adequate memory.
 
 ## S3 backend
 

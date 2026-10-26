@@ -11,12 +11,12 @@ import (
 	"syscall"
 )
 
-// openNoFollow refuses trailing symlinks: O_NOFOLLOW fails the open itself
-// instead of racing a separate check.
+// openNoFollow refuses trailing symlinks and opens nonblocking so special
+// files such as FIFOs can be rejected without waiting for a peer.
 func openNoFollow(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("nofollow open %s: %w", path, err)
+		return nil, fmt.Errorf("nofollow open %q: %w", path, err)
 	}
 	return f, nil
 }

@@ -69,7 +69,9 @@ Scheduled jobs cannot prompt. The keystore unlock order is fixed:
 1. `PETRAVAULT_PASSWORD_COMMAND`: prints the password
    (`secret-tool`, `pass`, cloud secret managers, keyring). Helpers run
    under a 60s timeout so a hanging helper cannot block unlock forever.
-2. `PETRAVAULT_PASSWORD_FILE`: file must be mode `0600`, refused otherwise.
+2. `PETRAVAULT_PASSWORD_FILE`: must be a regular file with mode `0600`,
+   refused otherwise. On Unix it is opened without following symlinks and
+   nonblocking, so a FIFO cannot hang password loading.
 3. Interactive prompt (manual runs only).
 
 Passwords never live in `config.yaml` or job files and are never passed as
@@ -103,8 +105,11 @@ built-ins (log `info`, concurrency 4, ECC `medium`, verify-after `true`).
 Override the file with `PETRAVAULT_CONFIG` or `--config`. Repository
 selection (every command except `init`): `--repository`, then
 `PETRAVAULT_REPOSITORY`, then `default_repository`. Group/world-readable
-`config.yaml` warns; job files must be `0600` and are permission-checked at
-load. No secrets belong in either file.
+`config.yaml` warns; job and state files must be regular files with mode
+`0600`, owned by the effective user, and are type-, owner-, and
+permission-checked at load. Their schedule directories must be owned by that
+user and not group/world-writable on Unix. Windows checks the owner using ACL
+metadata. No secrets belong in either file.
 
 ## Systemd example
 

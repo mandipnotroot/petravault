@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"petravault/internal/nofollow"
 )
 
 // Layout subdirectories of a local repository (DESIGN.md §8).
@@ -102,7 +104,7 @@ func (l *Local) PutObject(_ context.Context, key string, r io.Reader) error {
 	if err := root.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create parent: %w", err)
 	}
-	return writeRootDurable(root, path, r)
+	return writeRootDurable(root, path, key, r)
 }
 
 // PutObjectIfAbsent implements Repository. O_EXCL creation is the
@@ -133,7 +135,7 @@ func (l *Local) PutObjectIfAbsent(_ context.Context, key string, r io.Reader) (b
 	// On any failure before install, remove the temp file. After a
 	// successful link the temp path is unlinked separately.
 	writeErr := func() error {
-		if _, err := io.Copy(tmp, r); err != nil {
+		if err := copyObjectForWrite(tmp, r, key); err != nil {
 			return fmt.Errorf("write %s: %w", key, err)
 		}
 		if err := tmp.Sync(); err != nil {
@@ -175,9 +177,9 @@ func (l *Local) GetObject(_ context.Context, key string) (io.ReadCloser, error) 
 		return nil, fmt.Errorf("open repository: %w", err)
 	}
 	defer root.Close()
-	f, err := root.Open(path)
+	f, err := openRegularObject(root, path, key)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", key, err)
+		return nil, err
 	}
 	return f, nil
 }
@@ -196,15 +198,32 @@ func (l *Local) GetRange(_ context.Context, key string, offset, length int64) (i
 		return nil, fmt.Errorf("open repository: %w", err)
 	}
 	defer root.Close()
-	f, err := root.Open(path)
+	f, err := openRegularObject(root, path, key)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", key, err)
+		return nil, err
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("seek %s: %w", key, err)
 	}
 	return &rangeReader{f: f, r: io.LimitReader(f, length)}, nil
+}
+
+func openRegularObject(root *os.Root, path, key string) (*os.File, error) {
+	f, err := nofollow.OpenInRoot(root, path)
+	if err != nil {
+		return nil, fmt.Errorf("open repository object %q: %w", key, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat repository object %q: %w", key, err)
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, fmt.Errorf("repository object %q is not a regular file", key)
+	}
+	return f, nil
 }
 
 // DeleteObject implements Repository. A missing key is not an error.
@@ -299,7 +318,7 @@ func createRootTemp(root *os.Root, path string) (*os.File, string, error) {
 	return f, name, err
 }
 
-func writeRootDurable(root *os.Root, path string, r io.Reader) (err error) {
+func writeRootDurable(root *os.Root, path, key string, r io.Reader) (err error) {
 	tmp, name, err := createRootTemp(root, path)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
@@ -310,7 +329,7 @@ func writeRootDurable(root *os.Root, path string, r io.Reader) (err error) {
 			_ = root.Remove(name)
 		}
 	}()
-	if _, err = io.Copy(tmp, r); err != nil {
+	if err = copyObjectForWrite(tmp, r, key); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err = tmp.Sync(); err != nil {

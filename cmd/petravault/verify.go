@@ -74,7 +74,7 @@ with 'latest' it verifies the newest trusted snapshot.`,
 				report.Snapshots, report.Packs, report.Indexes, report.Slots, report.Sources)
 			tips := make([]string, 0, len(report.Tips))
 			for source, tip := range report.Tips {
-				tips = append(tips, source+"="+tip)
+				tips = append(tips, fmt.Sprintf("%q=%s", source, tip))
 			}
 			slices.Sort(tips)
 			for _, t := range tips {

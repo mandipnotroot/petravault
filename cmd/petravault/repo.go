@@ -56,8 +56,8 @@ func openRepo(ctx context.Context, cfg config.Config, repoPath string) (reposito
 // config against the client-local trust list. It returns the repository,
 // its verified config, and the trust material callers need to open key
 // slots and snapshots. A config signed by a revoked or removed key is
-// refused outright (DESIGN.md §5): a surviving trusted member re-signs it
-// with `ecc set`.
+// refused outright (DESIGN.md §5). The current CLI has no recovery path for
+// that config: `ecc set` must first verify the existing config and refuses it.
 func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
 	repo, err := openRepo(ctx, cfg, repoPath)
 	if err != nil {
@@ -93,8 +93,8 @@ func closeLocalRepo(repo repository.Repository) {
 
 // requireTrustedConfigSigner refuses a repository config whose signer is
 // revoked or removed from the client-local trust list. Revocation
-// disqualifies new trust unconditionally; history stays readable only after
-// a surviving member re-signs the config.
+// disqualifies new trust unconditionally. `ecc set` cannot recover the config
+// because opening it verifies the existing signer before any update.
 func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error {
 	fp, err := identity.ParseFingerprint(signer)
 	if err != nil {
@@ -105,7 +105,7 @@ func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%w: repository config signer %s is revoked or removed (have a surviving member re-sign it with `ecc set`)", pverrors.ErrUntrustedSigner, fp.Grouped())
+		return fmt.Errorf("%w: repository config signer %s is revoked or removed; `ecc set` cannot recover this config because it must verify the current signer first", pverrors.ErrUntrustedSigner, fp.Grouped())
 	}
 	return nil
 }

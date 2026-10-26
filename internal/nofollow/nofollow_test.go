@@ -49,6 +49,14 @@ func TestOpenRefusesTrailingSymlink(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsDirectory(t *testing.T) {
+	t.Parallel()
+
+	if _, err := nofollow.Open(t.TempDir()); err == nil {
+		t.Fatal("Open accepted a directory, want a regular-file error")
+	}
+}
+
 func TestOpenMissingFails(t *testing.T) {
 	t.Parallel()
 

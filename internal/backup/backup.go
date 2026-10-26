@@ -279,7 +279,7 @@ func newRunner(ctx context.Context, repo repository.Repository, opts Options) (*
 func (b *runner) walk(ctx context.Context) error {
 	return fs.WalkDir(b.sourceRoot.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", path, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", path, err))
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -295,7 +295,7 @@ func (b *runner) walk(ctx context.Context) error {
 		rel = filepath.ToSlash(rel)
 		info, err := b.sourceRoot.Lstat(filepath.FromSlash(rel))
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 			return nil
 		}
 		isDir := info.IsDir()
@@ -333,7 +333,7 @@ func (b *runner) walk(ctx context.Context) error {
 			entry.Type = TypeSymlink
 			target, err := b.sourceRoot.Readlink(filepath.FromSlash(rel))
 			if err != nil {
-				b.warn(ctx, fmt.Sprintf("skipping symlink %s: %v", rel, err))
+				b.warn(ctx, fmt.Sprintf("skipping symlink %q: %q", rel, err))
 				return nil
 			}
 			entry.Target = target
@@ -349,7 +349,7 @@ func (b *runner) walk(ctx context.Context) error {
 			}
 			entry.Chunks = chunks
 		default:
-			b.warn(ctx, fmt.Sprintf("skipping %s: unsupported file type %s", rel, info.Mode().Type()))
+			b.warn(ctx, fmt.Sprintf("skipping %q: unsupported file type %s", rel, info.Mode().Type()))
 			return nil
 		}
 		b.files = append(b.files, entry)
@@ -370,13 +370,13 @@ func (b *runner) fileChunks(ctx context.Context, path, rel string, info os.FileI
 	before := statFingerprint(info)
 	chunks, added, err := b.chunkFile(ctx, path, info)
 	if err != nil {
-		b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+		b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 		b.forgetPending(added)
 		return nil, false
 	}
 	afterInfo, err := b.sourceRoot.Lstat(filepath.FromSlash(path))
 	if err != nil {
-		b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+		b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 		b.forgetPending(added)
 		return nil, false
 	}
@@ -387,12 +387,12 @@ func (b *runner) fileChunks(ctx context.Context, path, rel string, info os.FileI
 		b.forgetPending(added)
 		chunks, added, err = b.chunkFile(ctx, path, afterInfo)
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 			b.forgetPending(added)
 			return nil, false
 		}
 		if finalInfo, err := b.sourceRoot.Lstat(filepath.FromSlash(path)); err != nil || statFingerprint(finalInfo) != statFingerprint(afterInfo) {
-			b.warn(ctx, fmt.Sprintf("file %s changed during read; stored a torn copy", rel))
+			b.warn(ctx, fmt.Sprintf("file %q changed during read; stored a torn copy", rel))
 		}
 	}
 	return chunks, true
