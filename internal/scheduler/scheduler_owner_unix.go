@@ -35,7 +35,7 @@ func checkScheduleOwner(fi os.FileInfo, path string) error {
 	if !ok {
 		return fmt.Errorf("schedule path %s: cannot determine owner", path)
 	}
-	if stat.Uid != uint32(os.Geteuid()) {
+	if int64(stat.Uid) != int64(os.Geteuid()) {
 		return fmt.Errorf("schedule path %s is not owned by the current user", path)
 	}
 	return nil

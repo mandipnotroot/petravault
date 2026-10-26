@@ -186,11 +186,12 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 			}
 		}
 		warn, sidecarErr := checkSidecar(ctx, repo, key, sealed)
-		if sidecarErr != nil {
+		switch {
+		case sidecarErr != nil:
 			errs = append(errs, sidecarErr)
-		} else if warn != "" {
+		case warn != "":
 			report.Warnings = append(report.Warnings, warn)
-		} else if opts.Deep {
+		case opts.Deep:
 			if err := checkParity(ctx, repo, key, sealed); err != nil {
 				errs = append(errs, err)
 			}
@@ -227,11 +228,12 @@ func Verify(ctx context.Context, repo repository.Repository, repoCfg repository.
 		}
 		manifests[hexID] = m
 		warn, sidecarErr := checkSidecar(ctx, repo, manifest.SnapshotPrefix+hexID, sealed)
-		if sidecarErr != nil {
+		switch {
+		case sidecarErr != nil:
 			errs = append(errs, sidecarErr)
-		} else if warn != "" {
+		case warn != "":
 			report.Warnings = append(report.Warnings, warn)
-		} else if opts.Deep {
+		case opts.Deep:
 			if err := checkParity(ctx, repo, manifest.SnapshotPrefix+hexID, sealed); err != nil {
 				errs = append(errs, err)
 			}
@@ -540,7 +542,7 @@ func openTrustedSnapshot(ctx context.Context, repo repository.Repository, repoCf
 func checkSidecar(ctx context.Context, repo repository.Repository, objectKey string, objectBytes []byte) (string, error) {
 	exists, err := repo.Exists(ctx, erasure.SidecarKey(objectKey))
 	if err != nil {
-		return "sidecar check failed for " + objectKey + ": " + err.Error(), nil
+		return sidecarWarningFromError(objectKey, "sidecar check failed", err)
 	}
 	if !exists {
 		return "missing sidecar for " + objectKey, nil
@@ -550,16 +552,20 @@ func checkSidecar(ctx context.Context, repo repository.Repository, objectKey str
 		if errors.Is(err, pverrors.ErrIntegrity) {
 			return "", err
 		}
-		return "unreadable sidecar for " + objectKey + ": " + err.Error(), nil
+		return sidecarWarningFromError(objectKey, "unreadable sidecar", err)
 	}
 	sc, err := erasure.Decode(raw)
 	if err != nil {
-		return "corrupt sidecar for " + objectKey + ": " + err.Error(), nil
+		return sidecarWarningFromError(objectKey, "corrupt sidecar", err)
 	}
 	if sc.DataLength != len(objectBytes) {
 		return "sidecar length mismatch for " + objectKey, nil
 	}
 	return "", nil
+}
+
+func sidecarWarningFromError(objectKey, reason string, cause error) (string, error) {
+	return reason + " for " + objectKey + ": " + cause.Error(), nil
 }
 
 // checkParity runs the ECC parity check for one object that has a sidecar.

@@ -44,6 +44,8 @@ func TestLocalReadsRejectFIFOWithoutBlocking(t *testing.T) {
 		}},
 	} {
 		t.Run(read.name, func(t *testing.T) {
+			t.Parallel()
+
 			reader, err := read.open()
 			if reader != nil {
 				if closeErr := reader.Close(); closeErr != nil {

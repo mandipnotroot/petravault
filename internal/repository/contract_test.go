@@ -159,7 +159,8 @@ func runContract(t *testing.T, newRepo func(t *testing.T) repository.Repository)
 		if len(got) != len(withinLimit) {
 			t.Fatalf("read %d bytes, want %d", len(got), len(withinLimit))
 		}
-		overLimit := append(withinLimit, 'x')
+		overLimit := bytes.Clone(withinLimit)
+		overLimit = append(overLimit, 'x')
 		if err := repo.PutObject(ctx, key, bytes.NewReader(overLimit)); !errors.Is(err, pverrors.ErrUsage) {
 			t.Fatalf("oversized write error = %v, want ErrUsage", err)
 		}
