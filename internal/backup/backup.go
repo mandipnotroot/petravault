@@ -28,6 +28,7 @@ import (
 	"petravault/internal/crypto"
 	"petravault/internal/erasure"
 	pverrors "petravault/internal/errors"
+	"petravault/internal/nofollow"
 	"petravault/internal/pack"
 	"petravault/internal/repository"
 )
@@ -131,6 +132,7 @@ func Backup(ctx context.Context, repo repository.Repository, opts Options) (Resu
 	if err != nil {
 		return Result{}, err
 	}
+	defer b.sourceRoot.Close()
 	if err := b.walk(ctx); err != nil {
 		return Result{}, err
 	}
@@ -143,11 +145,12 @@ type runner struct {
 	opts   Options
 	logger *slog.Logger
 
-	sourceID string
-	started  time.Time
-	params   chunking.Params
-	matcher  Matcher
-	parent   map[string]FileEntry
+	sourceID   string
+	sourceRoot *os.Root
+	started    time.Time
+	params     chunking.Params
+	matcher    Matcher
+	parent     map[string]FileEntry
 
 	dataKey    crypto.SecretKey
 	chunkIDKey crypto.SecretKey
@@ -259,14 +262,24 @@ func newRunner(ctx context.Context, repo repository.Repository, opts Options) (*
 		b.target = pack.TargetPackSize
 	}
 	b.writer = pack.NewWriter(opts.RepositoryID, sub.Data, b.target)
+	sourceRoot, err := os.OpenRoot(opts.Source)
+	if err != nil {
+		return nil, fmt.Errorf("open source root: %w", err)
+	}
+	opened, err := sourceRoot.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		_ = sourceRoot.Close()
+		return nil, fmt.Errorf("%w: source directory changed while opening", pverrors.ErrIntegrity)
+	}
+	b.sourceRoot = sourceRoot
 	return b, nil
 }
 
 // walk scans the source tree in lexical order.
 func (b *runner) walk(ctx context.Context) error {
-	return filepath.WalkDir(b.opts.Source, func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(b.sourceRoot.FS(), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", path, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", path, err))
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -275,17 +288,14 @@ func (b *runner) walk(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(b.opts.Source, path)
-		if err != nil {
-			return fmt.Errorf("relativize %s: %w", path, err)
-		}
+		rel := path
 		if rel == "." {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		info, err := d.Info()
+		info, err := b.sourceRoot.Lstat(filepath.FromSlash(rel))
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 			return nil
 		}
 		isDir := info.IsDir()
@@ -305,7 +315,7 @@ func (b *runner) walk(ctx context.Context) error {
 			}
 		}
 		if isDir && b.opts.ExcludeCaches {
-			if _, err := os.Lstat(filepath.Join(path, cachedirTag)); err == nil {
+			if _, err := b.sourceRoot.Lstat(filepath.Join(filepath.FromSlash(rel), cachedirTag)); err == nil {
 				b.logger.InfoContext(ctx, "skipping cache directory", slog.String("path", rel))
 				return filepath.SkipDir
 			}
@@ -321,9 +331,9 @@ func (b *runner) walk(ctx context.Context) error {
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			entry.Type = TypeSymlink
-			target, err := os.Readlink(path)
+			target, err := b.sourceRoot.Readlink(filepath.FromSlash(rel))
 			if err != nil {
-				b.warn(ctx, fmt.Sprintf("skipping symlink %s: %v", rel, err))
+				b.warn(ctx, fmt.Sprintf("skipping symlink %q: %q", rel, err))
 				return nil
 			}
 			entry.Target = target
@@ -339,7 +349,7 @@ func (b *runner) walk(ctx context.Context) error {
 			}
 			entry.Chunks = chunks
 		default:
-			b.warn(ctx, fmt.Sprintf("skipping %s: unsupported file type %s", rel, info.Mode().Type()))
+			b.warn(ctx, fmt.Sprintf("skipping %q: unsupported file type %s", rel, info.Mode().Type()))
 			return nil
 		}
 		b.files = append(b.files, entry)
@@ -358,15 +368,15 @@ func (b *runner) fileChunks(ctx context.Context, path, rel string, info os.FileI
 		}
 	}
 	before := statFingerprint(info)
-	chunks, added, err := b.chunkFile(ctx, path)
+	chunks, added, err := b.chunkFile(ctx, path, info)
 	if err != nil {
-		b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+		b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 		b.forgetPending(added)
 		return nil, false
 	}
-	afterInfo, err := os.Lstat(path)
+	afterInfo, err := b.sourceRoot.Lstat(filepath.FromSlash(path))
 	if err != nil {
-		b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+		b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 		b.forgetPending(added)
 		return nil, false
 	}
@@ -375,14 +385,14 @@ func (b *runner) fileChunks(ctx context.Context, path, rel string, info os.FileI
 		// packs as valid but unreferenced orphans for prune to reclaim;
 		// only the second pass feeds the entry.
 		b.forgetPending(added)
-		chunks, added, err = b.chunkFile(ctx, path)
+		chunks, added, err = b.chunkFile(ctx, path, afterInfo)
 		if err != nil {
-			b.warn(ctx, fmt.Sprintf("skipping %s: %v", rel, err))
+			b.warn(ctx, fmt.Sprintf("skipping %q: %q", rel, err))
 			b.forgetPending(added)
 			return nil, false
 		}
-		if finalInfo, err := os.Lstat(path); err != nil || statFingerprint(finalInfo) != statFingerprint(afterInfo) {
-			b.warn(ctx, fmt.Sprintf("file %s changed during read; stored a torn copy", rel))
+		if finalInfo, err := b.sourceRoot.Lstat(filepath.FromSlash(path)); err != nil || statFingerprint(finalInfo) != statFingerprint(afterInfo) {
+			b.warn(ctx, fmt.Sprintf("file %q changed during read; stored a torn copy", rel))
 		}
 	}
 	return chunks, true
@@ -391,12 +401,19 @@ func (b *runner) fileChunks(ctx context.Context, path, rel string, info os.FileI
 // chunkFile streams one file through the keyed chunker, storing new blobs
 // and returning hex chunk IDs in file order plus the IDs added to the
 // pending pack.
-func (b *runner) chunkFile(ctx context.Context, path string) ([]string, [][32]byte, error) {
-	f, err := os.Open(path)
+func (b *runner) chunkFile(ctx context.Context, path string, expected os.FileInfo) ([]string, [][32]byte, error) {
+	f, err := nofollow.OpenInRoot(b.sourceRoot, filepath.FromSlash(path))
 	if err != nil {
 		return nil, nil, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(expected, opened) {
+		return nil, nil, errors.New("source file changed before opening")
+	}
 	chunker, err := chunking.New(f, b.params, b.chunkerKey[:])
 	if err != nil {
 		return nil, nil, err

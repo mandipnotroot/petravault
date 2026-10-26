@@ -56,13 +56,19 @@ func openRepo(ctx context.Context, cfg config.Config, repoPath string) (reposito
 // config against the client-local trust list. It returns the repository,
 // its verified config, and the trust material callers need to open key
 // slots and snapshots. A config signed by a revoked or removed key is
-// refused outright (DESIGN.md §5): a surviving trusted member re-signs it
-// with `ecc set`.
+// refused outright (DESIGN.md §5). The current CLI has no recovery path for
+// that config: `ecc set` must first verify the existing config and refuses it.
 func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (repository.Repository, repository.Config, *identity.TrustStore, map[string][]byte, error) {
 	repo, err := openRepo(ctx, cfg, repoPath)
 	if err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
+	verified := false
+	defer func() {
+		if !verified {
+			closeLocalRepo(repo)
+		}
+	}()
 	trust := identity.NewTrustStore(trustDir())
 	trusted, err := listTrustedSigners(trust)
 	if err != nil {
@@ -75,13 +81,20 @@ func openVerifiedRepo(ctx context.Context, cfg config.Config, repoPath string) (
 	if err := requireTrustedConfigSigner(trust, signer); err != nil {
 		return nil, repository.Config{}, nil, nil, err
 	}
+	verified = true
 	return repo, repoCfg, trust, trusted, nil
+}
+
+func closeLocalRepo(repo repository.Repository) {
+	if local, ok := repo.(*repository.Local); ok {
+		_ = local.Close() // releasing a directory capability; no buffered writes
+	}
 }
 
 // requireTrustedConfigSigner refuses a repository config whose signer is
 // revoked or removed from the client-local trust list. Revocation
-// disqualifies new trust unconditionally; history stays readable only after
-// a surviving member re-signs the config.
+// disqualifies new trust unconditionally. `ecc set` cannot recover the config
+// because opening it verifies the existing signer before any update.
 func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error {
 	fp, err := identity.ParseFingerprint(signer)
 	if err != nil {
@@ -92,7 +105,7 @@ func requireTrustedConfigSigner(trust *identity.TrustStore, signer string) error
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("%w: repository config signer %s is revoked or removed (have a surviving member re-sign it with `ecc set`)", pverrors.ErrUntrustedSigner, fp.Grouped())
+		return fmt.Errorf("%w: repository config signer %s is revoked or removed; `ecc set` cannot recover this config because it must verify the current signer first", pverrors.ErrUntrustedSigner, fp.Grouped())
 	}
 	return nil
 }
@@ -243,7 +256,8 @@ func manifestToBackup(files []manifest.File) []backup.FileEntry {
 // (empty for the first backup), its entries for the fast path, and its
 // creation time for the racily-clean guard. A forked chain is an integrity
 // failure, never a silent pick of a winner.
-func parentForSource(ctx context.Context, repo repository.Repository, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte) (string, []backup.FileEntry, time.Time, error) {
+func parentForSource(ctx context.Context, repo repository.Repository, repoID, sourceID string, dataKey crypto.SecretKey, trust *identity.TrustStore, trusted map[string][]byte, recordedHead string) (string, []backup.FileEntry, time.Time, error) {
+	recordedHead = strings.ToLower(strings.TrimSpace(recordedHead))
 	ids, err := manifest.List(ctx, repo)
 	if err != nil {
 		return "", nil, time.Time{}, err
@@ -268,6 +282,9 @@ func parentForSource(ctx context.Context, repo repository.Repository, repoID, so
 		owned = append(owned, candidate{id: id, m: m})
 	}
 	if len(owned) == 0 {
+		if recordedHead != "" {
+			return "", nil, time.Time{}, fmt.Errorf("%w: source %q recorded head is missing", pverrors.ErrRollback, sourceID)
+		}
 		return "", nil, time.Time{}, nil
 	}
 	byID := make(map[string]candidate, len(owned))
@@ -307,6 +324,24 @@ func parentForSource(ctx context.Context, repo repository.Repository, repoID, so
 		return "", nil, time.Time{}, fmt.Errorf("%w: source %q has %d tips, want 1", pverrors.ErrIntegrity, sourceID, len(tips))
 	}
 	tip := byID[tips[0]]
+	if recordedHead != "" {
+		found := false
+		id := tip.id
+		for range len(byID) {
+			if id == recordedHead {
+				found = true
+				break
+			}
+			parent, ok := byID[id]
+			if !ok {
+				break
+			}
+			id = strings.ToLower(strings.TrimSpace(parent.m.Parent))
+		}
+		if !found {
+			return "", nil, time.Time{}, fmt.Errorf("%w: source %q recorded head is missing or is not an ancestor of its tip", pverrors.ErrRollback, sourceID)
+		}
+	}
 	return tip.id, manifestToBackup(tip.m.Files), tip.m.CreatedAt, nil
 }
 

@@ -133,17 +133,12 @@ func PublishTrustList(owner *PrivateIdentity, trust *TrustStore, now func() time
 			return nil, err
 		}
 		payload.Trusted = append(payload.Trusted, base64.StdEncoding.EncodeToString(pub))
-		revoked, err := trust.IsRevoked(id.Fingerprint)
-		if err != nil {
-			return nil, err
-		}
-		if !revoked {
-			continue
-		}
-		env, err := trust.RevocationEnvelope(id.Fingerprint)
-		if err != nil {
-			return nil, err
-		}
+	}
+	revocations, err := trust.RevocationEnvelopes()
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range revocations {
 		payload.Revoked = append(payload.Revoked, base64.StdEncoding.EncodeToString(env))
 	}
 	raw, err := json.Marshal(payload)
@@ -198,6 +193,7 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 		return nil, fmt.Errorf("%w: trust list names owner %s, want %s", pverrors.ErrIntegrity, list.owner.Grouped(), owner.Fingerprint().Grouped())
 	}
 	restored := make(map[string][]byte, len(list.trusted))
+	var identities []*Identity
 	for _, raw := range list.trusted {
 		pub, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
@@ -207,11 +203,14 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 		if err != nil {
 			return nil, fmt.Errorf("recover trust list: %w", err)
 		}
-		if err := store.Add(id); err != nil {
-			return nil, fmt.Errorf("recover trust list: %w", err)
-		}
+		identities = append(identities, id)
 		restored[id.Fingerprint.String()] = id.SignPublic
 	}
+	type tombstone struct {
+		target Fingerprint
+		raw    []byte
+	}
+	var tombstones []tombstone
 	for _, raw := range list.revoked {
 		env, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil || len(env) == 0 {
@@ -228,7 +227,17 @@ func RecoverTrustList(envBytes []byte, owner *PrivateIdentity, store *TrustStore
 		if _, err := VerifyRevocation(env, signerPub); err != nil {
 			return nil, fmt.Errorf("recover trust list: %w", err)
 		}
-		if err := store.AddRevocation(rev.Fingerprint, env); err != nil {
+		tombstones = append(tombstones, tombstone{target: rev.Fingerprint, raw: env})
+	}
+	// Validate the entire view before granting authority. Persist denials
+	// first, so even a later filesystem failure cannot activate a revoked key.
+	for _, rev := range tombstones {
+		if err := store.AddRevocation(rev.target, rev.raw); err != nil {
+			return nil, fmt.Errorf("recover trust list: %w", err)
+		}
+	}
+	for _, id := range identities {
+		if err := store.Add(id); err != nil {
 			return nil, fmt.Errorf("recover trust list: %w", err)
 		}
 	}

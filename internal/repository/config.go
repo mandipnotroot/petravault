@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"time"
@@ -288,14 +287,7 @@ func ReadConfig(ctx context.Context, repo Repository, trusted map[string][]byte)
 	if len(trusted) == 0 {
 		return Config{}, "", fmt.Errorf("%w: no trusted keys", pverrors.ErrUntrustedSigner)
 	}
-	r, err := repo.GetObject(ctx, ConfigKey)
-	if err != nil {
-		return Config{}, "", fmt.Errorf("read repository config: %w", err)
-	}
-	defer r.Close()
-	// Config envelopes are small JSON; cap the read so a hostile
-	// repository cannot OOM the reader with a giant config object.
-	envBytes, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	envBytes, err := ReadObject(ctx, repo, ConfigKey)
 	if err != nil {
 		return Config{}, "", fmt.Errorf("read repository config: %w", err)
 	}

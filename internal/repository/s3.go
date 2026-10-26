@@ -340,7 +340,7 @@ func (s *S3Repository) PutObject(ctx context.Context, key string, r io.Reader) e
 	if err != nil {
 		return err
 	}
-	data, err := io.ReadAll(r)
+	data, err := readObjectForWrite(r, key)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", key, err)
 	}
@@ -365,7 +365,7 @@ func (s *S3Repository) PutObjectIfAbsent(ctx context.Context, key string, r io.R
 	if err != nil {
 		return false, err
 	}
-	data, err := io.ReadAll(r)
+	data, err := readObjectForWrite(r, key)
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", key, err)
 	}

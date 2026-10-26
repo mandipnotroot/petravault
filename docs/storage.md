@@ -37,6 +37,27 @@ doubles as the object name.
 `Rename`, then directory `Sync`. `PutObjectIfAbsent` uses `O_EXCL` as the
 compare-and-swap for locks. `GetRange` seeks and reads exactly the
 requested span. Addressed as a filesystem path; `Init` is idempotent.
+All object operations and traversal are relative to a retained `os.Root`
+capability; neither repository-controlled symlinks nor replacement of the
+selected root pathname can redirect them. Reads open nonblocking on Unix and
+reject non-regular objects, so a FIFO stored under an object key cannot hang
+the client. `Local.Close` releases that capability.
+
+Whole-object reads are byte-bounded by class and reject limit+1 bytes as an
+integrity failure, never as a successful truncated read; writers refuse
+oversized known-class objects too. Writes under unknown keys are capped at
+1 MiB, and `ReadObject` rejects those classes. Config/small identity
+objects and revocations are limited to 1 MiB, lock records to 64 KiB, rosters
+and trust-list backups to 16 MiB, and each index or snapshot to 256 MiB. A
+chunk range is limited to 1 GiB + 1 MiB compression allowance + 40 bytes of
+AEAD overhead. Packs have an 8 GiB reader ceiling, preserving the supported
+1 GiB pack target and 1 GiB maximum chunk with conservative room for the
+encrypted header; this ceiling is not a recommended pack size. Pack sidecars
+are capped at 11 GiB and index/snapshot sidecars at 384 MiB for the maximum
+100% parity setting and JSON base64 expansion. Unknown object classes and
+oversize data fail closed with `ErrIntegrity` (exit code 4). S3 still buffers
+accepted objects fully in memory, so use the default ~16 MiB pack size unless
+the machine has adequate memory.
 
 ## S3 backend
 
@@ -100,6 +121,9 @@ petravault ecc rebuild                    # re-protect existing objects (reads e
 into fresh parity — and writes the new sidecar before replacing the old one.
 Rebuilding to `off` removes sidecars. It takes `gc.lock` (no prune overlap)
 while backups keep running; on S3 it needs maintenance credentials.
+Because rebuild changes sidecars only, it refuses any object whose verified
+in-memory repair differs from its stored bytes, preserving the old sidecar
+until the durable ciphertext is repaired separately. This also applies to `off`.
 
 Repair: checksum-failed shards become known erasures, are reconstructed,
 and the result is re-verified by AEAD. Beyond-budget damage is reported as
@@ -132,6 +156,8 @@ sidecars; packs ≥ 50% dead are repacked under the current pack/ECC settings;
 indexes are compacted; orphans from failed backups are removed. Prune
 refuses to run without at least one keep rule and never removes the newest
 snapshot of any source. `--dry-run` previews without the lock or changes.
+Surviving pack entries authenticate all chunk blobs before authorizing index
+replacement or deletion; a genuine header alone does not prove blob integrity.
 
 ## Repository config
 

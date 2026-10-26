@@ -105,7 +105,7 @@ func newIdentityListCmd(f *flags) *cobra.Command {
 				if e.Owned {
 					owned = "owned"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s  %s\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "%s  %q  %s  %s\n",
 					e.Identity.Fingerprint.Grouped(), e.Identity.Name,
 					e.Identity.CreatedAt.Format("2006-01-02T15:04:05Z"), owned)
 			}

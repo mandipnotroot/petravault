@@ -49,10 +49,12 @@ There is no transitive trust. `trust add` loads the public keys from
 `identities/<fingerprint>.pub` or an imported `.pub` file and accepts them
 only when their hash equals the confirmed fingerprint, so the repository
 copy is safe to use. `trust sync` lists those repo copies (fingerprint,
-name, slot, local state) for discovery, and `trust sync <fingerprint>`
+escaped name, slot, local state) for discovery, and `trust sync <fingerprint>`
 approves one with the same hash check — the typed fingerprint is the
 explicit decision. A new member must trust the granting identity before
 their client opens a key slot or the repository config that identity signed.
+Names are advisory metadata and are quoted in terminal output; always verify
+the full fingerprint out of band before approval.
 
 ## Trust anchors live on the client
 
@@ -85,6 +87,11 @@ opens the seal, and restores both, so a wiped client comes back without
 repeating every fingerprint check. It reports the snapshot's age:
 re-publish after every trust change, re-confirm revocations with the team
 when it looks old, and let the next `verify` re-learn heads.
+Exports include tombstones even after their target is removed from active
+trust. Both recovery paths validate all identities and revocations before
+granting authority, then write revocations before trusted keys. In particular,
+an unavailable historical revocation signer causes a fail-closed import, not
+a partial trust grant that omits the disqualification.
 
 ## Member roster
 
@@ -113,6 +120,10 @@ hint is never trusted. `config/repository.json` is likewise a signed
 envelope (`"petravault repo-config v1"`); clients refuse configs with an
 invalid or untrusted signature, and refuse manifests naming any other suite
 or chunking algorithm, so a hostile repository cannot downgrade parameters.
+A config signed by a revoked or removed identity is also refused. There is no
+safe recovery command for that config in the current CLI: `ecc set` verifies
+the existing config before changing it and fails closed too. Do not restore
+revoked trust to bypass this check.
 
 ## Limitations
 

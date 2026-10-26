@@ -102,18 +102,17 @@ func Export(store *identity.Store, trust *identity.TrustStore, fp identity.Finge
 			return nil, nil, err
 		}
 		out.Trusted = append(out.Trusted, fileEntry{Name: entry.Fingerprint.String() + ".json", Data: entryPub})
-		revoked, err := trust.IsRevoked(entry.Fingerprint)
+	}
+	revocations, err := trust.RevocationEnvelopes()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, env := range revocations {
+		rev, err := identity.DecodeRevocation(env)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !revoked {
-			continue
-		}
-		env, err := trust.RevocationEnvelope(entry.Fingerprint)
-		if err != nil {
-			return nil, nil, err
-		}
-		out.Revoked = append(out.Revoked, fileEntry{Name: entry.Fingerprint.String() + ".rev", Data: env})
+		out.Revoked = append(out.Revoked, fileEntry{Name: rev.Fingerprint.String() + ".rev", Data: env})
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
@@ -171,12 +170,8 @@ func Import(store *identity.Store, trust *identity.TrustStore, fileBytes, bundle
 	if !id.Fingerprint.Equal(owner) {
 		return nil, fmt.Errorf("%w: bundle identity mismatch", pverrors.ErrIntegrity)
 	}
-	if _, err := store.Import(wire.Public); err != nil {
-		return nil, fmt.Errorf("import recovery: %w", err)
-	}
-	if _, err := store.ImportPrivate(owner, wire.PrivateSealed, identityPassword); err != nil {
-		return nil, fmt.Errorf("import recovery: %w", err)
-	}
+	var identities []*identity.Identity
+	restored := make(map[string][]byte, len(wire.Trusted))
 	for _, entry := range wire.Trusted {
 		fp, err := parseTrustName(entry.Name)
 		if err != nil {
@@ -189,11 +184,9 @@ func Import(store *identity.Store, trust *identity.TrustStore, fileBytes, bundle
 		if !entryID.Fingerprint.Equal(fp) {
 			return nil, fmt.Errorf("%w: bundle trust entry mismatch", pverrors.ErrIntegrity)
 		}
-		if err := trust.Add(entryID); err != nil {
-			return nil, fmt.Errorf("import recovery: %w", err)
-		}
+		identities = append(identities, entryID)
+		restored[entryID.Fingerprint.String()] = entryID.SignPublic
 	}
-	restored := make(map[string][]byte, len(wire.Trusted))
 	listed, err := trust.List()
 	if err != nil {
 		return nil, fmt.Errorf("import recovery: %w", err)
@@ -220,7 +213,26 @@ func Import(store *identity.Store, trust *identity.TrustStore, fileBytes, bundle
 		if _, err := identity.VerifyRevocation(entry.Data, signerPub); err != nil {
 			return nil, fmt.Errorf("import recovery: %w", err)
 		}
+	}
+	if _, err := store.Import(wire.Public); err != nil {
+		return nil, fmt.Errorf("import recovery: %w", err)
+	}
+	if _, err := store.ImportPrivate(owner, wire.PrivateSealed, identityPassword); err != nil {
+		return nil, fmt.Errorf("import recovery: %w", err)
+	}
+	// No grants until every record is valid and both passwords were proven.
+	// Install revocations first so partial writes remain fail-closed.
+	for _, entry := range wire.Revoked {
+		fp, err := parseRevokedName(entry.Name)
+		if err != nil {
+			return nil, err
+		}
 		if err := trust.AddRevocation(fp, entry.Data); err != nil {
+			return nil, fmt.Errorf("import recovery: %w", err)
+		}
+	}
+	for _, entryID := range identities {
+		if err := trust.Add(entryID); err != nil {
 			return nil, fmt.Errorf("import recovery: %w", err)
 		}
 	}

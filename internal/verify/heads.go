@@ -126,26 +126,40 @@ func UpdateHead(path, sourceID, snapshotID string, now func() time.Time) error {
 	if _, err := manifest.ParseSnapshotID(snapshotID); err != nil {
 		return err
 	}
-	if now == nil {
-		now = time.Now
-	}
-	heads, err := LoadHeads(path)
-	if err != nil {
-		return err
-	}
-	heads[sourceID] = Head{Snapshot: strings.ToLower(strings.TrimSpace(snapshotID)), UpdatedAt: now().UTC()}
-	return SaveHeads(path, heads)
+	return UpdateTips(path, map[string]string{sourceID: snapshotID}, now)
 }
 
 // UpdateTips records every current tip in heads. It is called after a
 // successful backup or verify (DESIGN.md §9).
 func UpdateTips(path string, tips map[string]string, now func() time.Time) error {
+	return updateTips(path, tips, nil, false, now)
+}
+
+// CompareAndUpdateTips advances only heads unchanged since the caller checked
+// their history. Concurrent newer observations must never be overwritten by
+// a stale repository view. Unrelated sources are preserved.
+func CompareAndUpdateTips(path string, tips map[string]string, expected map[string]Head, now func() time.Time) error {
+	return updateTips(path, tips, expected, true, now)
+}
+
+func updateTips(path string, tips map[string]string, expected map[string]Head, compare bool, now func() time.Time) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("%w: head-record path is empty", pverrors.ErrUsage)
 	}
 	if now == nil {
 		now = time.Now
 	}
+	// Exclusive creation serializes every read-modify-write across processes
+	// on all supported platforms. A crash leaves a fail-closed lock for the
+	// operator to remove only after confirming no writer remains.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create head-record dir: %w", err)
+	}
+	lock := path + ".lock"
+	if err := os.Mkdir(lock, 0o700); err != nil {
+		return fmt.Errorf("lock head records (retry if another operation is running): %w", err)
+	}
+	defer os.Remove(lock)
 	heads, err := LoadHeads(path)
 	if err != nil {
 		return err
@@ -157,6 +171,9 @@ func UpdateTips(path string, tips map[string]string, now func() time.Time) error
 		}
 		if _, err := manifest.ParseSnapshotID(tip); err != nil {
 			return err
+		}
+		if compare && heads[source].Snapshot != expected[source].Snapshot && heads[source].Snapshot != tip {
+			return fmt.Errorf("%w: source %q head changed during operation; retry", pverrors.ErrRollback, source)
 		}
 		heads[source] = Head{Snapshot: strings.ToLower(strings.TrimSpace(tip)), UpdatedAt: at}
 	}

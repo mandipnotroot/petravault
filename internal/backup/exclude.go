@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 
 	pverrors "petravault/internal/errors"
@@ -112,72 +113,75 @@ func (m Matcher) Excluded(rel string, isDir bool) bool {
 // classes match one non-separator character.
 func globStarMatch(pattern, target string) bool {
 	tokens := tokenizeGlob(pattern)
+	chars := []rune(target)
 	// dp[j] tracks whether the tokens consumed so far match target[:j].
-	dp := make([]bool, len(target)+1)
+	dp := make([]bool, len(chars)+1)
 	dp[0] = true
 	for _, tok := range tokens {
-		next := make([]bool, len(target)+1)
+		next := make([]bool, len(chars)+1)
 		switch tok.kind {
 		case globLiteral:
-			for j := range len(target) {
-				if dp[j] && target[j] == tok.char {
+			for j := range chars {
+				if dp[j] && chars[j] == tok.char {
 					next[j+1] = true
 				}
 			}
 		case globAny:
-			for j := range len(target) {
-				if dp[j] && target[j] != '/' {
+			for j := range chars {
+				if dp[j] && chars[j] != '/' {
 					next[j+1] = true
 				}
 			}
 		case globStar:
-			for j := 0; j <= len(target); j++ {
+			for j := 0; j <= len(chars); j++ {
 				if dp[j] {
 					next[j] = true
-					if j < len(target) && target[j] != '/' {
+					if j < len(chars) && chars[j] != '/' {
 						dp[j+1] = true
 					}
 				}
 			}
 		case globDoubleStar:
-			for j := 0; j <= len(target); j++ {
+			for j := 0; j <= len(chars); j++ {
 				if dp[j] {
 					next[j] = true
-					if j < len(target) {
+					if j < len(chars) {
 						dp[j+1] = true
 					}
 				}
 			}
 		case globDoubleStarSlash:
-			for j := 0; j <= len(target); j++ {
+			for j := 0; j <= len(chars); j++ {
 				if dp[j] {
 					next[j] = true
-					for m := j; m < len(target); m++ {
-						if target[m] == '/' {
+					for m := j; m < len(chars); m++ {
+						if chars[m] == '/' {
 							next[m+1] = true
 						}
 					}
 				}
 			}
 		case globClass:
-			for j := range len(target) {
-				if dp[j] && target[j] != '/' && tok.class[target[j]] != tok.negate {
+			for j := range chars {
+				matched := slices.ContainsFunc(tok.class, func(bounds [2]rune) bool {
+					return bounds[0] <= chars[j] && chars[j] <= bounds[1]
+				})
+				if dp[j] && chars[j] != '/' && matched != tok.negate {
 					next[j+1] = true
 				}
 			}
 		}
 		dp = next
 	}
-	return dp[len(target)]
+	return dp[len(chars)]
 }
 
 // globToken is one element of a tokenized pattern.
 type globToken struct {
 	kind  globKind
-	char  byte
-	class map[byte]bool
-	// negate inverts class membership. It is a bool rather than folding the
-	// inversion into the map so a class matching every byte stays small.
+	char  rune
+	class [][2]rune
+	// negate inverts membership without expanding Unicode ranges.
 	negate bool
 }
 
@@ -197,12 +201,13 @@ const (
 // passed bracket validation in compileGlob, so class parsing cannot fail.
 func tokenizeGlob(pattern string) []globToken {
 	var out []globToken
-	for i := 0; i < len(pattern); {
-		switch c := pattern[i]; {
+	chars := []rune(pattern)
+	for i := 0; i < len(chars); {
+		switch c := chars[i]; {
 		// A "**/" also matches zero elements, so fold the slash into the
 		// token: it matches empty or any prefix ending in '/'.
-		case c == '*' && i+1 < len(pattern) && pattern[i+1] == '*':
-			if i+2 < len(pattern) && pattern[i+2] == '/' {
+		case c == '*' && i+1 < len(chars) && chars[i+1] == '*':
+			if i+2 < len(chars) && chars[i+2] == '/' {
 				out = append(out, globToken{kind: globDoubleStarSlash})
 				i += 3
 			} else {
@@ -216,31 +221,29 @@ func tokenizeGlob(pattern string) []globToken {
 			out = append(out, globToken{kind: globAny})
 			i++
 		case c == '[':
-			tok := globToken{kind: globClass, class: make(map[byte]bool)}
+			tok := globToken{kind: globClass}
 			j := i + 1
-			if j < len(pattern) && (pattern[j] == '^' || pattern[j] == '!') {
+			if j < len(chars) && (chars[j] == '^' || chars[j] == '!') {
 				tok.negate = true
 				j++
 			}
-			if j < len(pattern) && pattern[j] == ']' {
-				tok.class[']'] = true
+			if j < len(chars) && chars[j] == ']' {
+				tok.class = append(tok.class, [2]rune{']', ']'})
 				j++
 			}
-			for j < len(pattern) && pattern[j] != ']' {
-				if j+2 < len(pattern) && pattern[j+1] == '-' && pattern[j+2] != ']' {
-					for b := pattern[j]; b <= pattern[j+2]; b++ {
-						tok.class[b] = true
-					}
+			for j < len(chars) && chars[j] != ']' {
+				if j+2 < len(chars) && chars[j+1] == '-' && chars[j+2] != ']' {
+					tok.class = append(tok.class, [2]rune{chars[j], chars[j+2]})
 					j += 3
 				} else {
-					tok.class[pattern[j]] = true
+					tok.class = append(tok.class, [2]rune{chars[j], chars[j]})
 					j++
 				}
 			}
 			out = append(out, tok)
 			i = j + 1
-		case c == '\\' && i+1 < len(pattern):
-			out = append(out, globToken{kind: globLiteral, char: pattern[i+1]})
+		case c == '\\' && i+1 < len(chars):
+			out = append(out, globToken{kind: globLiteral, char: chars[i+1]})
 			i += 2
 		default:
 			out = append(out, globToken{kind: globLiteral, char: c})

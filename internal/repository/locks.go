@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -562,18 +561,11 @@ func StartHeartbeat(ctx context.Context, repo Repository, key, operation, holder
 }
 
 func readLock(ctx context.Context, repo Repository, key string) (Lock, error) {
-	r, err := repo.GetObject(ctx, key)
+	raw, err := ReadObject(ctx, repo, key)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return Lock{}, fmt.Errorf("%w: lock %s is missing", pverrors.ErrIntegrity, key)
 		}
-		return Lock{}, fmt.Errorf("read lock %s: %w", key, err)
-	}
-	defer r.Close()
-	// Locks are tiny JSON; cap the read so a hostile repository cannot
-	// OOM the reader with a giant lock object.
-	raw, err := io.ReadAll(io.LimitReader(r, 64<<10))
-	if err != nil {
 		return Lock{}, fmt.Errorf("read lock %s: %w", key, err)
 	}
 	var lock Lock

@@ -502,6 +502,7 @@ func scheduleRunner(f *flags, cfg config.Config, logger *slog.Logger) scheduler.
 		if err != nil {
 			return "", err
 		}
+		defer closeLocalRepo(repo)
 		effective := *f
 		if strings.TrimSpace(job.Identity) != "" {
 			effective.identity = job.Identity

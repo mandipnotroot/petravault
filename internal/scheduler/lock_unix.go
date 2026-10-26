@@ -29,9 +29,16 @@ func TryLock(stateDir, name string) (*JobLock, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create schedule state dir: %w", err)
 	}
+	if err := checkScheduleDirectory(stateDir); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open job lock: %w", err)
+	}
+	if err := checkScheduleFileOwner(f, path); err != nil {
+		_ = f.Close()
+		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()

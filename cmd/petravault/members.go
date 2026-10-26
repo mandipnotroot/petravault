@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"petravault/internal/crypto"
@@ -164,14 +163,9 @@ func newMembersSyncCmd(f *flags) *cobra.Command {
 			}
 			defer master.Zero()
 			defer dataKey.Zero()
-			r, err := repo.GetObject(ctx, identity.MembersKey)
+			env, err := repository.ReadObject(ctx, repo, identity.MembersKey)
 			if err != nil {
 				return fmt.Errorf("read member roster: %w (a member must run `members publish` first)", err)
-			}
-			defer r.Close()
-			env, err := io.ReadAll(r)
-			if err != nil {
-				return fmt.Errorf("read member roster: %w", err)
 			}
 			summary, err := identity.AdoptMembers(env, dataKey, repoCfg.RepositoryID, trust, func(publisher string) ([]byte, error) {
 				fp, err := identity.ParseFingerprint(publisher)

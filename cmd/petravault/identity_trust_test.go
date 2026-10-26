@@ -72,6 +72,33 @@ func TestIdentityCreateList(t *testing.T) {
 	}
 }
 
+func TestTerminalIdentityMetadataIsQuoted(t *testing.T) {
+	isolatedIdentityEnv(t, "test-password")
+	name := "mallory\x1b[2J\nforged-row"
+	out, _ := runCmd(t, "identity", "create", "--name", name)
+	fp := fingerprintFromCreate(t, out)
+
+	for _, args := range [][]string{{"identity", "list"}, {"trust", "list"}} {
+		out, _ = runCmd(t, args...)
+		if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-row") {
+			t.Fatalf("%v emitted raw terminal metadata: %q", args, out)
+		}
+		if !strings.Contains(out, `mallory\x1b[2J\nforged-row`) {
+			t.Fatalf("%v did not quote the identity name: %q", args, out)
+		}
+	}
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+	out, _ = runCmd(t, "--repository", repo, "trust", "sync")
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-row") {
+		t.Fatalf("trust sync emitted raw advisory metadata: %q", out)
+	}
+	if !strings.Contains(out, `mallory\x1b[2J\nforged-row`) {
+		t.Fatalf("trust sync did not quote the advisory identity name: %q", out)
+	}
+}
+
 func TestIdentityExportImport(t *testing.T) {
 	isolatedIdentityEnv(t, "test-password")
 	out, _ := runCmd(t, "identity", "create", "--name", "alice")
@@ -175,6 +202,13 @@ func TestConfigSignerRevokedRefusesOpen(t *testing.T) {
 	}
 	if !errors.Is(err, pverrors.ErrUntrustedSigner) {
 		t.Fatalf("revoked config error = %v, want an untrusted-signer failure", err)
+	}
+	if !strings.Contains(err.Error(), "`ecc set` cannot recover") {
+		t.Fatalf("revoked config error = %v, want accurate recovery guidance", err)
+	}
+	err = runCmdErr(t, "-r", repo, "ecc", "set", "high")
+	if !errors.Is(err, pverrors.ErrUntrustedSigner) || !strings.Contains(err.Error(), "cannot recover") {
+		t.Fatalf("ecc set error = %v, want fail-closed recovery refusal", err)
 	}
 }
 

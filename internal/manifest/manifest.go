@@ -24,7 +24,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"path/filepath"
 	"slices"
@@ -185,6 +184,83 @@ func (m Manifest) Validate(wantRepo string) error {
 		seen[f.Path] = true
 		if err := validateFile(f); err != nil {
 			return err
+		}
+	}
+	return ValidateSymlinkTargets(m.Files, nil)
+}
+
+// ValidateSymlinkTargets checks component-wise link resolution rather than
+// lexical cleaning, which would process ".." before a preceding symlink.
+// existing optionally returns the target of an existing destination symlink,
+// or an empty string for a missing path or a non-symlink.
+func ValidateSymlinkTargets(files []File, existing func(string) (string, error)) error {
+	proposed := make(map[string]File, len(files))
+	for _, f := range files {
+		proposed[f.Path] = f
+	}
+	for _, f := range files {
+		for parent := path.Dir(f.Path); parent != "."; parent = path.Dir(parent) {
+			if entry, ok := proposed[parent]; ok && entry.Type != TypeDir {
+				return fmt.Errorf("%w: manifest path %q has a non-directory ancestor", pverrors.ErrIntegrity, f.Path)
+			}
+			if existing != nil {
+				target, err := existing(parent)
+				if err != nil || target != "" {
+					return fmt.Errorf("%w: destination ancestor for %q is not a plain directory", pverrors.ErrIntegrity, f.Path)
+				}
+			}
+		}
+		if f.Type == TypeDir && existing != nil {
+			target, err := existing(f.Path)
+			if err != nil || target != "" {
+				return fmt.Errorf("%w: destination directory %q is a symlink or inaccessible", pverrors.ErrIntegrity, f.Path)
+			}
+		}
+		if f.Type != TypeSymlink {
+			continue
+		}
+		pending := strings.Split(path.Dir(f.Path)+"/"+filepath.ToSlash(f.Target), "/")
+		var resolved []string
+		links := 0
+		for len(pending) > 0 {
+			component := pending[0]
+			pending = pending[1:]
+			switch component {
+			case "", ".":
+				continue
+			case "..":
+				if len(resolved) == 0 {
+					return fmt.Errorf("%w: symlink %q escapes the destination", pverrors.ErrIntegrity, f.Path)
+				}
+				resolved = resolved[:len(resolved)-1]
+				continue
+			}
+			resolved = append(resolved, component)
+			name := strings.Join(resolved, "/")
+			if !filepath.IsLocal(filepath.FromSlash(name)) {
+				return fmt.Errorf("%w: symlink %q has an unsafe target", pverrors.ErrIntegrity, f.Path)
+			}
+			var target string
+			if entry, ok := proposed[name]; ok {
+				if entry.Type == TypeSymlink {
+					target = entry.Target
+				}
+			} else if existing != nil {
+				var err error
+				target, err = existing(name)
+				if err != nil {
+					return fmt.Errorf("%w: cannot resolve symlink %q: %w", pverrors.ErrIntegrity, f.Path, err)
+				}
+			}
+			if target == "" {
+				continue
+			}
+			links++
+			if links > 40 || filepath.IsAbs(target) || filepath.VolumeName(target) != "" {
+				return fmt.Errorf("%w: symlink %q has an escaping or cyclic target", pverrors.ErrIntegrity, f.Path)
+			}
+			resolved = resolved[:len(resolved)-1]
+			pending = append(strings.Split(filepath.ToSlash(target), "/"), pending...)
 		}
 	}
 	return nil
@@ -437,12 +513,7 @@ func openWithKey(ctx context.Context, repo repository.Repository, repoID string,
 		return Manifest{}, nil, fmt.Errorf("%w: repository id is empty", pverrors.ErrUsage)
 	}
 	key := SnapshotPrefix + hexID
-	r, err := repo.GetObject(ctx, key)
-	if err != nil {
-		return Manifest{}, nil, fmt.Errorf("read snapshot %s: %w", hexID, err)
-	}
-	defer r.Close()
-	envBytes, err := io.ReadAll(r)
+	envBytes, err := repository.ReadObject(ctx, repo, key)
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("read snapshot %s: %w", hexID, err)
 	}

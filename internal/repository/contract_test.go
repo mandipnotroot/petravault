@@ -5,13 +5,28 @@ package repository_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
 	"testing"
 
+	pverrors "petravault/internal/errors"
 	"petravault/internal/repository"
 )
+
+type objectOverrideRepo struct {
+	repository.Repository
+	key string
+	raw []byte
+}
+
+func (r objectOverrideRepo) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	if key == r.key {
+		return io.NopCloser(bytes.NewReader(r.raw)), nil
+	}
+	return r.Repository.GetObject(ctx, key)
+}
 
 // runContract exercises the Repository contract shared by LocalRepository
 // and S3Repository (DESIGN.md §8, GO_GUIDELINES.md §14). newRepo returns an
@@ -105,12 +120,7 @@ func runContract(t *testing.T, newRepo func(t *testing.T) repository.Repository)
 		if err := repo.PutObject(ctx, "packs/p", bytes.NewReader(data)); err != nil {
 			t.Fatal(err)
 		}
-		rc, err := repo.GetRange(ctx, "packs/p", 4, 6)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rc.Close()
-		got, err := io.ReadAll(rc)
+		got, err := repository.ReadRange(ctx, repo, "packs/p", 4, 6)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,6 +139,41 @@ func runContract(t *testing.T, newRepo func(t *testing.T) repository.Repository)
 		}
 		if _, err := repo.GetRange(ctx, "packs/p", 0, -4); err == nil {
 			t.Fatal("negative length accepted, want error")
+		}
+	})
+
+	t.Run("bounded object read", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := t.Context()
+		repo := newRepo(t)
+		key := "locks/read-limit"
+		withinLimit := bytes.Repeat([]byte("x"), int(repository.MaxLockObjectBytes))
+		if err := repo.PutObject(ctx, key, bytes.NewReader(withinLimit)); err != nil {
+			t.Fatal(err)
+		}
+		got, err := repository.ReadObject(ctx, repo, key)
+		if err != nil {
+			t.Fatalf("read object at limit: %v", err)
+		}
+		if len(got) != len(withinLimit) {
+			t.Fatalf("read %d bytes, want %d", len(got), len(withinLimit))
+		}
+		overLimit := bytes.Clone(withinLimit)
+		overLimit = append(overLimit, 'x')
+		if err := repo.PutObject(ctx, key, bytes.NewReader(overLimit)); !errors.Is(err, pverrors.ErrUsage) {
+			t.Fatalf("oversized write error = %v, want ErrUsage", err)
+		}
+		oversized := objectOverrideRepo{Repository: repo, key: key, raw: overLimit}
+		if _, err := repository.ReadObject(ctx, oversized, key); !errors.Is(err, pverrors.ErrIntegrity) {
+			t.Fatalf("oversized read error = %v, want ErrIntegrity", err)
+		}
+		if _, err := repository.ReadRange(ctx, repo, "packs/missing", 0, repository.MaxChunkRangeBytes+1); !errors.Is(err, pverrors.ErrIntegrity) {
+			t.Fatalf("oversized range error = %v, want ErrIntegrity", err)
+		}
+		unknownOverLimit := bytes.Repeat([]byte("x"), int(repository.MaxUnclassifiedWriteBytes)+1)
+		if err := repo.PutObject(ctx, "custom/read-limit", bytes.NewReader(unknownOverLimit)); !errors.Is(err, pverrors.ErrUsage) {
+			t.Fatalf("oversized unclassified write error = %v, want ErrUsage", err)
 		}
 	})
 

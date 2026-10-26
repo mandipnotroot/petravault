@@ -30,6 +30,9 @@ XChaCha20-Poly1305 → one immutable object (+ parity sidecar)
 Snapshots commit atomically: packs, then index, then the single snapshot
 object, then its sidecar. A failure before the snapshot object leaves only
 orphans for prune; a partial snapshot is never valid.
+Parent history is checked against the client-local head before backup commit,
+including with verify-after-backup disabled. Source reads are rooted and bind
+the opened regular file to its scanned identity before consuming plaintext.
 
 ## Layering
 
@@ -97,6 +100,10 @@ running twice is stopped by a local advisory lock. Only prune and
 `locks/backup-<id>` markers first, then check for the lock, then read
 indexes. `ecc rebuild` holds the lock but lets backups keep running.
 See `storage.md`.
+
+Head-store updates use an exclusive local lock directory and compare against
+the validated prior head. Contention is retriable; a crash-left lock requires
+operator removal after confirming no writer remains. Records are not reset.
 
 ## CLI
 

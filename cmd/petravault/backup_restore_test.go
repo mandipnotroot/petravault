@@ -4,10 +4,14 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	pverrors "petravault/internal/errors"
 )
 
 func writeSrcFile(t *testing.T, dir, name, data string) {
@@ -30,6 +34,49 @@ func snapshotFromBackup(t *testing.T, output string) string {
 	}
 	t.Fatalf("no snapshot in output %q", output)
 	return ""
+}
+
+func TestSnapshotTerminalSourceAndPathAreQuoted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain terminal control characters")
+	}
+	isolatedIdentityEnv(t, "test-password")
+	out, _ := runCmd(t, "identity", "create", "--name", "alice")
+	fp := fingerprintFromCreate(t, out)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(src, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fileName := "\x1b[2J\nforged.txt"
+	if err := os.WriteFile(filepath.Join(src, fileName), []byte("dummy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceID := "laptop\x1b[2J\nforged-source"
+	out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", sourceID, "--ecc", "off", "--no-verify")
+	snapshotID := snapshotFromBackup(t, out)
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-source") {
+		t.Fatalf("backup emitted raw source metadata: %q", out)
+	}
+	if !strings.Contains(out, `source: "laptop\x1b[2J\nforged-source"`) {
+		t.Fatalf("backup did not quote the source ID: %q", out)
+	}
+
+	for _, args := range [][]string{
+		{"--repository", repo, "snapshots", "list"},
+		{"--repository", repo, "snapshots", "show", snapshotID},
+		{"--repository", repo, "verify"},
+	} {
+		out, _ = runCmd(t, args...)
+		if strings.Contains(out, "\x1b") || strings.Contains(out, "\nforged-source") || strings.Contains(out, "\nforged.txt") {
+			t.Fatalf("%v emitted raw snapshot metadata: %q", args, out)
+		}
+		if !strings.Contains(out, `\x1b[2J\n`) {
+			t.Fatalf("%v did not quote terminal metadata: %q", args, out)
+		}
+	}
 }
 
 func TestBackupVerifyRestoreRoundTrip(t *testing.T) {
@@ -124,6 +171,43 @@ func TestBackupVerifyAfterBackupFlags(t *testing.T) {
 	}
 	if err := runCmdErr(t, "--repository", repo, "backup", src, "--verify", "--no-verify"); err == nil {
 		t.Fatal("backup with both --verify and --no-verify succeeded")
+	}
+}
+
+func TestBackupDoesNotResetDeletedHead(t *testing.T) {
+	for _, deleteAll := range []bool{false, true} {
+		name := "deleted-tip"
+		if deleteAll {
+			name = "deleted-entire-source"
+		}
+		t.Run(name, func(t *testing.T) {
+			isolatedIdentityEnv(t, "test-password")
+			out, _ := runCmd(t, "identity", "create", "--name", "alice")
+			fp := fingerprintFromCreate(t, out)
+			repo := filepath.Join(t.TempDir(), "repo")
+			runCmd(t, "init", repo, "--identity", fp, "--ecc", "off")
+			src := t.TempDir()
+			writeSrcFile(t, src, "dummy.txt", "v1")
+			out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off")
+			first := snapshotFromBackup(t, out)
+			writeSrcFile(t, src, "dummy.txt", "v2")
+			out, _ = runCmd(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off")
+			second := snapshotFromBackup(t, out)
+			if err := os.Remove(filepath.Join(repo, "snapshots", second)); err != nil {
+				t.Fatal(err)
+			}
+			if deleteAll {
+				if err := os.Remove(filepath.Join(repo, "snapshots", first)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, flag := range []string{"--verify", "--no-verify"} {
+				err := runCmdErr(t, "--repository", repo, "backup", src, "--source-id", "source", "--ecc", "off", flag)
+				if !errors.Is(err, pverrors.ErrRollback) {
+					t.Fatalf("backup %s after deletion: %v, want rollback rejection", flag, err)
+				}
+			}
+		})
 	}
 }
 

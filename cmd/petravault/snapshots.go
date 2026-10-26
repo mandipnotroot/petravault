@@ -105,7 +105,7 @@ func runSnapshotsList(cmd *cobra.Command, f *flags) error {
 		return cmp.Compare(a.created, b.created)
 	})
 	for _, r := range rows {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %s  %s\n", r.id, r.source, r.created, r.signer)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s  %q  %s  %s\n", r.id, r.source, r.created, r.signer)
 	}
 	return nil
 }
@@ -150,11 +150,11 @@ func newSnapshotsShowCmd(f *flags) *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "snapshot: %s\nsource: %s\nparent: %s\ncreated: %s\nidentity: %s\nfiles: %d\n",
+			fmt.Fprintf(out, "snapshot: %s\nsource: %q\nparent: %s\ncreated: %s\nidentity: %s\nfiles: %d\n",
 				hexID, m.SourceID, cmp.Or(m.Parent, "-"), m.CreatedAt.Format("2006-01-02T15:04:05Z"), m.Identity, len(m.Files))
 			fmt.Fprintf(out, "payload_sha256: %s\n", strings.ToLower(manifest.FormatSnapshotID(manifest.SnapshotID(payload))))
 			for _, fe := range m.Files {
-				fmt.Fprintf(out, "%s  %s  %d\n", fe.Type, fe.Path, fe.Size)
+				fmt.Fprintf(out, "%s  %q  %d\n", fe.Type, fe.Path, fe.Size)
 			}
 			return nil
 		},

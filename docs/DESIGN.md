@@ -114,9 +114,13 @@ The scanner compares each file's `(path, size, mtime, inode, ctime)` with the **
 
 Two safeguards keep the fast path honest. Timestamps are compared at full (nanosecond) precision, and any file whose mtime or ctime falls within a couple of seconds of the parent snapshot's start is always re-read (the "racily clean" problem, where a later write lands in the same timestamp tick). A file is also `stat`ed before and after it is read; if it changed in between, it is re-read once, and if it is still changing the backup records it, logs a warning, and finishes with the warning exit code (§16).
 
+Source traversal and reads use one retained `os.Root` capability. Before any regular-file bytes are read, the opened descriptor must still name the scanned regular file; Unix source opens also refuse trailing symlinks and are nonblocking so replacement with a FIFO cannot hang the open. Path substitution must not upload data from outside the selected source, even as an orphan pack.
+
 ### 3.5 Excludes
 
 `--exclude <glob>`, `--exclude-file <path>`, `--exclude-caches`, and `--one-file-system` are part of `backup`. Excluded paths are not recorded in the manifest.
+
+Recursive glob matching treats `?` and character classes as Unicode characters, consistently with ordinary glob matching, not as individual UTF-8 bytes.
 
 ### Incremental logic
 
@@ -237,7 +241,7 @@ petravault ecc set high        # new default for objects written from now on (sa
 petravault ecc rebuild         # re-protect existing objects with the current setting
 ```
 
-`ecc set` only changes the default recorded in the signed `repository.json` (the acting identity re-signs it); existing objects keep their old parity and stay repairable under it. `ecc rebuild` rewrites sidecars only. Parity is computed over ciphertext, so the objects themselves are never touched. Each object is first repaired if needed and AEAD-verified, so damage is never encoded into fresh parity, and the new sidecar is written before the old one is replaced. Rebuilding to `off` removes sidecars. It reads every object once (on S3 that means download cost) and takes the maintenance lock (§10.2; it cannot overlap a prune, and backups keep running), so it is meant to be run rarely. On S3 it needs maintenance credentials (§8). Prune's repack (§11.3) also writes fresh parity under the current setting, so a repository drifts toward its setting over time even without a rebuild.
+`ecc set` only changes the default recorded in the signed `repository.json` (the acting identity re-signs it); existing objects keep their old parity and stay repairable under it. `ecc rebuild` rewrites sidecars only. Parity is computed over ciphertext, so the objects themselves are never touched. Each object is checked and, if needed, repaired in memory and AEAD-verified. If that repair differs from the durable object, rebuild fails with an integrity error and preserves the existing sidecar: removing or replacing parity must never discard the only recovery material for still-damaged stored bytes. Durable ciphertext must be repaired separately before rebuilding its sidecar. Otherwise the new sidecar is written before the old one is replaced. Rebuilding intact objects to `off` removes sidecars. It reads every object once (on S3 that means download cost) and takes the maintenance lock (§10.2; it cannot overlap a prune, and backups keep running), so it is meant to be run rarely. On S3 it needs maintenance credentials (§8). Prune's repack (§11.3) also writes fresh parity under the current setting, so a repository drifts toward its setting over time even without a rebuild.
 
 **Repair.** Damaged shards are identified by their checksums (they become known erasures), reconstructed, and the result is **re-verified by AEAD**. Reed-Solomon recovers erasures; it is never a substitute for cryptographic integrity, and tampered shards that reconstruct to invalid ciphertext are rejected. Damage beyond the parity budget is reported as unrecoverable, never silently ignored. Parity does not protect against loss of the whole object or repository (§12).
 
@@ -279,9 +283,11 @@ Trust is an explicit list of fingerprints, which is sufficient for personal and 
 
 A trust list stored in the repository would let an attacker who controls the repository add Mallory's key and sign fake snapshots. The **authoritative trust list is therefore a client-local file** (`$XDG_CONFIG_HOME/petravault/trust/{trusted-keys,revoked}/`). Copies of public keys in the repository are advisory only. A snapshot is accepted only if its signer's fingerprint is in the client's own trust list and not in its revoked list.
 
-Revocation records (`fingerprint`, `reason`, `created_at`, `signature`) are signed by another trusted identity, or by the key itself for self-revocation. They immediately disqualify a key from verifying new snapshots; historical snapshots follow the repository's recorded policy. Records are also published to `revocations/` in the repository as an advisory channel; a client adds one to its local revoked list only after verifying its signature against its own trust list. A hostile repository can withhold a revocation but cannot forge one, and records can only add to the revoked list, never remove from it. A repository config signed by a revoked or removed key is refused outright (exit code 4); a surviving trusted member re-signs it with `ecc set`.
+Revocation records (`fingerprint`, `reason`, `created_at`, `signature`) are signed by another trusted identity, or by the key itself for self-revocation. They immediately disqualify a key from verifying new snapshots; historical snapshots follow the repository's recorded policy. Records are also published to `revocations/` in the repository as an advisory channel; a client adds one to its local revoked list only after verifying its signature against its own trust list. A hostile repository can withhold a revocation but cannot forge one, and records can only add to the revoked list, never remove from it. A repository config signed by a revoked or removed key is refused outright (exit code 4). The current CLI has no safe recovery path for such a config: `ecc set` first opens and verifies the existing config and therefore also refuses it. Do not restore revoked authority merely to make the config readable.
 
 Trust-list backup (`trust publish` / `trust recover`). Each client may publish its own trust view — trusted identities plus revocation envelopes — HPKE-sealed to its own KEM key and signed, at `trust-lists/<own-fingerprint>.json`, and rebuild a lost local store from it. Only the owner opens it, so the trust graph stays hidden from storage observers and ex-members, and recovery needs no prior trust. A hostile repository can withhold or roll the record back but can neither read nor alter it. Recovery restores past human decisions, never makes new ones: the out-of-band fingerprint checks from when each member was added are preserved, not repeated. A stale record misses recent additions (safe direction: unknown signers fail closed) and recent revocations (unsafe direction), so `recover` prints the export time, re-publish is due after every trust change, and revocations are re-confirmed with the team. Heads still re-learn on the next verify (§9).
+
+Both trust exports and offline recovery bundles enumerate revocations independently of active trusted keys: removing a key must not omit its retained tombstone. Recovery validates the complete trust view and all revocation signatures before granting any trust, and persists tombstones before grants. An invalid record, unavailable revocation signer key, or failed tombstone write must not leave a revoked member newly authorized after a failed import.
 
 Offline recovery bundle (`recovery export` / `import`). One password-encrypted file holding the identity (public file plus the still-sealed private file) and the trust view — everything client-side that decryption needs. Export copies sealed bytes and never unlocks keys; import proves both passwords by unlocking the bundle and then the restored private key (the double confirm). The bundle deliberately carries no head records (§9): a recovered client restarts with no rollback history and re-learns heads on the next verify or backup, so snapshots deleted while the client was wiped are undetectable — treat the first post-recovery verify as trust-on-first-use and re-confirm repository contents out of band when that matters. Store the bundle off-machine with the password in your manager; it never belongs in the repository.
 
@@ -392,6 +398,10 @@ type Repository interface {
 
 Implementations: `LocalRepository`, `S3Repository` (via `aws-sdk-go-v2`). A repository is addressed as a local path or `s3:<bucket>[/<prefix>]`. A write is durable before it is reported as done: `LocalRepository` writes a temporary file, `fsync`s it, renames it into place, and `fsync`s the directory; an S3 `PUT` is atomic, and an interrupted multipart upload is aborted.
 
+Every local object operation and directory traversal uses an `os.Root` capability retained when the repository is opened. Replacing the selected root pathname later does not redirect operations. Lexical key validation alone is insufficient: repository-controlled parent or leaf symlinks must not redirect reads, writes, conditional creation, deletion, or directory syncing outside that root. Local object reads open nonblocking on Unix and reject any opened object that is not a regular file, so a repository FIFO cannot hang a reader. Closing a local repository releases its retained capability; unattended job attempts close it after use, including failed authentication.
+
+Whole-object reads use object-class byte limits and read one byte beyond the limit to detect oversize objects rather than silently accepting a truncated prefix; writes also refuse to create objects above those limits. Config, slots, advisory public keys, and revocations are limited to 1 MiB; lock records to 64 KiB; member rosters and trust-list backups to 16 MiB; and each index and snapshot to 256 MiB. Chunk ranges are limited to 1 GiB plus 1 MiB of compression overhead and the 40-byte AEAD nonce/tag. Packs are limited to 8 GiB: this preserves the maximum configured 1 GiB pack target and 1 GiB chunk size with a conservative encrypted-header allowance. Pack sidecars are limited to 11 GiB and index/snapshot sidecars to 384 MiB, covering the maximum 100% parity setting and JSON base64 expansion for objects within their class limits. Writes under unclassified keys have a 1 MiB ceiling; unknown classes cannot be read through the bounded object API. Objects above their read limit fail as integrity errors (exit code 4). These are hard reader limits, not recommended operating sizes; in particular, S3 continues to buffer each accepted object in memory.
+
 ```text
 repository/
 ├── config/repository.json        # signed envelope: repository_id, crypto suite, chunker + pack + default ECC parameters
@@ -456,6 +466,8 @@ The manifest is a JSON document. Its `snapshot_id` is **not** a field inside it;
 
 **Rollback and truncation.** A chain alone cannot reveal that the newest snapshots were deleted, because what remains is still a valid chain. Each client therefore keeps a **head record** per source and repository in its local state (`$XDG_STATE_HOME/petravault/heads/<repository_id>.json`), updated after every backup and verify. `verify` and `restore` fail if a recorded head is missing or is neither the current tip of its chain nor one of its ancestors. A client with no record (first use of a repository, or a client restored from a recovery bundle, which deliberately carries no head records) can only check the chain's internal consistency and says so. A record is reset only by explicit operator action, never automatically, and prune never removes the most recent snapshot of any source (§11.3).
 
+Whole-repository verification checks every recorded source, including sources whose entire snapshot set has disappeared. Before committing a backup, parent selection must establish continuity with the source's recorded head, even with `--no-verify`. Head read-modify-write operations are serialized by an exclusive client-local `<heads-file>.lock` directory, and advancement compares against the records used for history validation, so a concurrent newer observation cannot be overwritten by a stale operation. Contention fails safely and may be retried. A crashed writer may leave the lock directory; remove that directory only after confirming no head writer remains, without deleting or resetting the head records themselves.
+
 ### Verification modes
 
 | Mode | Command | Checks |
@@ -480,6 +492,8 @@ verify parent/history (within its source's chain) → read chunks → verify AEA
 ```
 
 **Restore safety.** A verified manifest is still treated as untrusted input to the filesystem. Restore rejects absolute paths and any `..` component, never follows a symlink out of the destination (including symlinks created earlier in the same restore), writes each file under a temporary name and renames it into place, and refuses to overwrite existing files unless `--overwrite` is given. Ownership is restored only when running as root, setuid/setgid bits are not restored, and decompression is capped at the repository's maximum chunk size so a crafted blob cannot expand without bound.
+
+Symlink targets are resolved component by component against the proposed link graph and existing destination links before creation; lexical cleaning is not a safety check. Safe nested relative targets remain supported. Cyclic or escaping link graphs, manifest entries below symlink ancestors, and existing destination symlink ancestors are rejected.
 
 ### Atomic commit
 
@@ -550,6 +564,7 @@ petravault schedule add --name daily-documents --source ~/Documents \
 
 - **Running jobs.** `schedule daemon` is a foreground loop that runs jobs when due (suitable for systemd, launchd, a Windows service, or a container). `schedule run` executes all currently due jobs once and exits (suitable for a system cron entry every few minutes); `schedule run <name>` runs one job immediately. `schedule status` shows each job's state.
 - **State per job:** `last_run`, `last_success`, `last_failure`, `failure_count`, `next_run`, kept separately from the job definition (§7).
+- **Ownership.** Job and state files must be owned by the effective user running Petravault. Their schedule directories must also be owned by that user and must not be group- or world-writable on Unix; Windows validates file and directory ownership against the process account using ACL metadata. Foreign-owned or insecure paths fail closed.
 - **Retry:** transient failures use bounded retry with exponential backoff (default 3 attempts, configurable per job). A failed attempt never leaves an inconsistent snapshot, because commit is atomic (§9).
 - **Missed runs:** if the machine was off at the scheduled time, the job runs once at the next start (catch-up), never once per missed interval.
 - **Overlap:** a job that is still running is not started again; the per-source local lock (§10.2) enforces this.
@@ -562,7 +577,7 @@ petravault schedule add --name daily-documents --source ~/Documents \
 Scheduled jobs cannot prompt for a password. The keystore (§4.4) is unlocked using, in order of preference:
 
 1. `PETRAVAULT_PASSWORD_COMMAND`: a command that prints the password (works with `secret-tool`, `pass`, cloud secret managers, or a keyring). Helpers run under a 60s timeout so a hanging helper cannot block unlock forever. The daemon environment is fully trusted input: anyone who controls it already runs code as the backup user, so keep unit files and `EnvironmentFile`s mode `0600` and never inject secrets through container or orchestrator environment.
-2. `PETRAVAULT_PASSWORD_FILE`: a file that must be mode `0600`, refused otherwise, and is opened without following symlinks on Unix (`O_NOFOLLOW`).
+2. `PETRAVAULT_PASSWORD_FILE`: a regular file that must be mode `0600`, refused otherwise, and is opened without following symlinks and nonblocking on Unix (`O_NOFOLLOW|O_NONBLOCK`). Special files such as FIFOs are rejected before reading.
 3. Interactive prompt (manual runs only).
 
 Passwords are never stored in `config.yaml` or job files and never passed as a command-line argument (visible in `ps`). Use a dedicated identity for scheduled machines so it can be revoked on its own. Example systemd unit for the daemon (more in `docs/unattended.md`):
@@ -584,19 +599,21 @@ petravault prune --keep-daily 30 --keep-weekly 12 --keep-monthly 12 --dry-run
 
 Pruning computes `unreferenced = all_chunks − chunks_referenced_by_retained_snapshots`. Retention keeps the newest snapshot of every source plus the newest snapshot per UTC day/week/month for the last N distinct buckets per source. Packs whose chunks are all unreferenced are deleted together with their parity sidecars. Packs that are mostly unreferenced are **repacked** (rewritten without the dead chunks, with fresh parity) once their unused fraction reaches 50%; a chunk cannot be deleted individually from a pack. Prune also compacts index files and removes orphans from failed backups. Prune refuses to run without at least one keep rule, and always keeps the most recent snapshot of every source (§9). It takes the maintenance lock and waits out or aborts on in-flight backups (§10.2), and `--dry-run` previews everything without taking the lock or changing the repository.
 
+Pack entries used to select surviving copies or rebuild an index authenticate every chunk blob, not merely the encrypted header and unkeyed content address, before maintenance can replace indexes or delete other copies.
+
 ---
 
 ## 12. Threat Model
 
 | Attacker | Capabilities | Primary mitigations |
 |---|---|---|
-| Malicious storage provider | read/delete/modify/replay/reorder objects | encryption, signatures, BLAKE3, per-source snapshot chain, verification |
+| Malicious storage provider | read/delete/modify/replay/reorder objects; return oversized objects | encryption, signatures, BLAKE3, per-source snapshot chain, verification, object-class read limits |
 | Network attacker | intercept/modify/replay traffic, downgrade | TLS (1.3 preferred), SigV4 auth, application-layer AEAD, signed metadata |
 | Stolen repository | full offline copy | client-side XChaCha20-Poly1305; **no private keys or password-verifiers in the repository** (§4.4); key slots need a client-held KEM private key |
 | Unauthorized identity | forges a keypair, signs fake snapshots, edits repo-side key files, forges key slots or `repository.json` | **client-pinned trust list** (§5.2), fingerprints, signature verification (snapshots, key slots, repository config), revocation |
 | Fingerprinting / confirmation-of-file | hashes a known file to check whether it is stored; matches chunk-size sequences | keyed chunk IDs, keyed chunker, IDs only inside encrypted objects (§3.2); residual size leakage listed below |
 | Repository corruption | bit rot, hardware failure | AEAD, BLAKE3, Reed-Solomon parity (`medium`, 5%, by default; §4.5), deep verification |
-| Scheduler attacker | modifies scheduled jobs (source, destination, retention) | job files `0600` and permission-checked at load, schema validation, no secrets in job files, logging of every run |
+| Scheduler attacker | modifies scheduled jobs (source, destination, retention) | current-user ownership checks for files/directories, private schedule directory, job files `0600`, schema validation, no secrets in job files, logging of every run |
 | Replay attacker | reintroduces old valid objects/snapshots | per-source snapshot chain and client-local head records (§9), `repository_id` in signed manifests, S3 Versioning/Object Lock; detection is scoped to a source's own chain since sources are independent (§10) |
 | Compromised client machine | holds keys, can write, may try to delete or overwrite history | write-only S3 credentials for routine clients, S3 Versioning/Object Lock, a dedicated per-machine identity that can be revoked (§11.2); prune and `ecc rebuild` run from a separate administrative credential (§8) |
 
@@ -618,7 +635,9 @@ Pruning computes `unreferenced = all_chunks − chunks_referenced_by_retained_sn
 | Concurrency | two clients backing up simultaneously to one repository (including identical new files); both snapshots must restore, then prune must dedupe; an interrupted backup must leave only orphans, never a partial snapshot; prune racing an in-flight backup never deletes a pack or chunk that a committing snapshot references (marker/lock ordering, §10.2) |
 | Security/attack simulation | see table below |
 | Multi-user | Alice (trusted) signs → valid; Bob signs → valid only on clients that have trusted him; Mallory (untrusted) signs → rejected |
-| Unattended | `PETRAVAULT_PASSWORD_FILE` with wrong mode refused; password never appears in process arguments or logs; job file with loose permissions or unknown fields rejected |
+| Unattended | `PETRAVAULT_PASSWORD_FILE` with wrong mode or non-regular type refused; password never appears in process arguments or logs; job/state file with loose permissions, foreign owner, non-regular type, or unknown fields rejected; group/world-writable Unix schedule directory rejected |
+| Repository read bounds | Every whole-object class rejects limit+1 bytes as `ErrIntegrity`; chunk ranges cannot exceed the maximum encrypted chunk size; supported 1 GiB pack target/chunk configurations remain readable |
+| Terminal output | Identity names, source IDs, filenames, and other untrusted metadata containing control characters are rendered with quoted escaping; terminal controls are not emitted literally |
 | Erasure coding | flip bytes in 1..m shards of a pack, index, and snapshot object → repaired and AEAD-verified; flip bytes in m+1 shards → clear unrecoverable error; `low`/`medium`/`high` resolve to 2%/5%/15%; custom percentages and `off` behave as specified; the same tests run against `LocalRepository` and `S3Repository` (S3 via a local S3-compatible test server); `ecc set` leaves existing objects repairable, and `ecc rebuild` re-protects them (including to and from `off`) and refuses to encode damaged data |
 
 ### Attack simulations (must all pass)
@@ -722,6 +741,11 @@ petravault prune [--keep-daily N] [--keep-weekly N] [--keep-monthly N] [--dry-ru
 `latest` means the newest trusted snapshot by creation time (untrusted snapshots
 are skipped; with none it fails closed). Missing-repository errors name the
 flag, environment, config, and `init` step.
+
+Terminal-facing output quotes untrusted metadata such as identity names,
+source IDs, and filenames. Control characters are escaped rather than
+interpreted by the terminal; fingerprints remain the trust decision and must
+still be checked out of band.
 
 **Exit codes:** `0` success; `1` error; `2` usage error; `3` completed with warnings (for example, files unreadable or still changing during backup); `4` integrity or trust failure (tampering, bad signature, rollback detected, unrecoverable corruption, malformed manifest after signature verification — an honestly produced manifest always validates, so post-verify structural failure means tampering, while the same defect at commit time is a usage error).
 
